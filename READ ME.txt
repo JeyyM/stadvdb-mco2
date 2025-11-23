@@ -1,0 +1,10 @@
+this is the .env:
+
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=fuckingpassword
+DB_NAME=stadvdb-mco2
+DB_PORT=3306
+
+# Server Configuration
+PORT=5000
