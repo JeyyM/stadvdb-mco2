@@ -8,3 +8,8 @@ DB_PORT=3306
 
 # Server Configuration
 PORT=5000
+
+When getting the imdb data:
+name.basics.tsv
+title.basics.tsv
+title.ratings.tsv
