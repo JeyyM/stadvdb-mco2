@@ -14,9 +14,76 @@ app.use(express.json());
 // API ROUTES
 // ============================================================================
 
+// Distributed select system
+app.get('/api/titles/distributed-select', async (req, res) => {
+  try {
+    const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
+    const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
+    res.json({
+      success: true,
+      count: results[0]?.length || 0,
+      data: results[0] || []
+    });
+  } catch (error) {
+    console.error('Error in distributed_select:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in distributed_select',
+      error: error.message
+    });
+  }
+});
+// Distributed search system
+app.get('/api/titles/distributed-search', async (req, res) => {
+  try {
+    const { search_term = '', limit_count = 20 } = req.query;
+    const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
+    res.json({
+      success: true,
+      count: results[0]?.length || 0,
+      data: results[0] || []
+    });
+  } catch (error) {
+    console.error('Error in distributed_search:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in distributed_search',
+      error: error.message
+    });
+  }
+});
+
 // Test route
 app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend API is working!' });
+});
+
+
+app.get('/api/aggregation', async (req, res) => {
+  try {
+    const [results] = await db.query('CALL distributed_aggregation()');
+    console.log('Raw aggregation results:', results);
+    let agg = results[0] && results[0][0] ? results[0][0] : null;
+    if (agg) {
+      agg.movie_count = Number(agg.movie_count);
+      agg.average_rating = agg.average_rating !== null ? Number(agg.average_rating) : null;
+      agg.average_weightedRating = agg.average_weightedRating !== null ? Number(agg.average_weightedRating) : null;
+      agg.total_votes = agg.total_votes !== null ? Number(agg.total_votes) : null;
+      agg.average_votes = agg.average_votes !== null ? Number(agg.average_votes) : null;
+    }
+    res.json({
+      success: true,
+      raw: results,
+      data: agg
+    });
+  } catch (error) {
+    console.error('Error fetching aggregations:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching aggregations',
+      error: error.message
+    });
+  }
 });
 
 // Title search system

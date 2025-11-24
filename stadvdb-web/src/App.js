@@ -2,432 +2,441 @@ import { useState, useEffect } from 'react';
 import './App.css';
 
 function App() {
-  // Title Search System state
-  const [titleQuery, setTitleQuery] = useState('Matrix');
-  const [minRating, setMinRating] = useState(5.0);
-  const [maxRating, setMaxRating] = useState(9.9);
-  const [minVotes, setMinVotes] = useState(10000);
-  const [resultLimit, setResultLimit] = useState(10);
-  const [searchResults, setSearchResults] = useState([]);
-  const [loadingSearch, setLoadingSearch] = useState(false);
-  const [errorSearch, setErrorSearch] = useState(null);
+  // Edit popup state
+  const [editRow, setEditRow] = useState(null);
+  const [showEditPopup, setShowEditPopup] = useState(false);
 
-  // Top Movies by Year state
-  const [startYear, setStartYear] = useState(2000);
-  const [endYear, setEndYear] = useState(2020);
-  const [minVotesYear, setMinVotesYear] = useState(1000);
-  const [topMoviesByYear, setTopMoviesByYear] = useState([]);
+  const handleEditClick = (row) => {
+    setEditRow(row);
+    setShowEditPopup(true);
+  };
 
-  const [loadingTopMovies, setLoadingTopMovies] = useState(false);
-  const [errorTopMovies, setErrorTopMovies] = useState(null);
+  const handleEditPopupClose = () => {
+    setShowEditPopup(false);
+    setEditRow(null);
+  };
 
-  // Function to search titles
-  const handleSearch = () => {
-    setLoadingSearch(true);
-    setErrorSearch(null);
+  const [aggregations, setAggregations] = useState(null);
+  const [loadingAggregations, setLoadingAggregations] = useState(true);
+  const [aggError, setAggError] = useState(null);
 
-    const params = new URLSearchParams({
-      title_query: titleQuery,
-      min_rating: minRating,
-      max_rating: maxRating,
-      min_votes: minVotes,
-      result_limit: resultLimit
-    });
+  // Distributed search state
+  const [searchTerm, setSearchTerm] = useState('');
+  const [limit, setLimit] = useState(20);
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [hasSearched, setHasSearched] = useState(false);
 
-    fetch(`http://localhost:5000/api/titles/search-advanced?${params}`)
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Network response was not ok');
-        }
-        return response.json();
+  // Distributed select state
+  const [selectColumn, setSelectColumn] = useState('averageRating');
+  const [orderDirection, setOrderDirection] = useState('DESC');
+  const [selectLimit, setSelectLimit] = useState(10);
+  const [selectResults, setSelectResults] = useState([]);
+  const [selectLoading, setSelectLoading] = useState(false);
+  const [selectError, setSelectError] = useState(null);
+  const [hasSelected, setHasSelected] = useState(false);
+
+  useEffect(() => {
+    fetchAggregations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const fetchAggregations = () => {
+    setLoadingAggregations(true);
+    setAggError(null);
+    fetch('http://localhost:5000/api/aggregation')
+      .then((response) => response.json())
+      .then((data) => {
+        setAggregations(data.data);
+        setLoadingAggregations(false);
+        console.log('Aggregation results:', data);
       })
-      .then(data => {
-        setSearchResults(data.data);
-        setLoadingSearch(false);
-      })
-      .catch(error => {
-        setErrorSearch(error.message);
-        setLoadingSearch(false);
+      .catch((error) => {
+        setAggError('Failed to load statistics');
+        setLoadingAggregations(false);
+        console.error('Aggregation fetch error:', error);
       });
   };
 
-  // Function to search top movies by year
-  const handleTopMoviesSearch = () => {
-    setLoadingTopMovies(true);
-    setErrorTopMovies(null);
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setHasSearched(true);
 
-    const params = new URLSearchParams({
-      start_year: startYear,
-      end_year: endYear,
-      min_votes: minVotesYear
-    });
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/titles/distributed-search?search_term=${encodeURIComponent(
+          searchTerm
+        )}&limit_count=${limit}`
+      );
+      let data;
+      let text;
+      try {
+        data = await res.clone().json();
+      } catch (jsonErr) {
+        text = await res.text();
+        console.error('Failed to parse JSON.');
+        console.error('Status:', res.status, res.statusText);
+        console.error('Headers:', Array.from(res.headers.entries()));
+        console.error('Raw response:', text);
+        setError('Search failed: Invalid server response. See console for details.');
+        return;
+      }
+      if (data.success) {
+        setResults(data.data);
+      } else {
+        setError(data.message || 'Search failed');
+        console.error('API error:', data);
+      }
+    } catch (err) {
+      console.error('Network or fetch error:', err);
+      setError('Search failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    fetch(`http://localhost:5000/api/titles/top-by-year?${params}`)
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Network response was not ok');
-        }
-        return response.json();
-      })
-      .then(data => {
-        setTopMoviesByYear(data.data);
-        setLoadingTopMovies(false);
-      })
-      .catch(error => {
-        setErrorTopMovies(error.message);
-        setLoadingTopMovies(false);
-      });
+  const handleSelect = async (e) => {
+    e.preventDefault();
+    setSelectLoading(true);
+    setSelectError(null);
+    setHasSelected(true);
+
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/titles/distributed-select?select_column=${encodeURIComponent(
+          selectColumn
+        )}&order_direction=${orderDirection}&limit_count=${selectLimit}`
+      );
+      const data = await res.json();
+      if (data.success) {
+        setSelectResults(data.data);
+      } else {
+        setSelectError(data.message || 'Select failed');
+      }
+    } catch (err) {
+      console.error(err);
+      setSelectError('Select failed');
+    } finally {
+      setSelectLoading(false);
+    }
   };
 
   return (
-    <div className="App">
-      <header className="App-header">
-        <h1>STADVDB IMDB Database</h1>
-        
-        {/* Title Search System Section */}
-        <div style={{ 
-          width: '90%', 
-          marginTop: '40px',
-          padding: '20px',
-          backgroundColor: '#1e1e1e',
-          borderRadius: '8px',
-          border: '1px solid #444'
-        }}>
-          <h2>Title Search System</h2>
-          <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '20px' }}>
-            Search titles with filters: title, rating range, and minimum votes
-          </p>
+    <div className="App app-root">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <div>
+            <h1 className="app-title">Distributed IMDB Dashboard</h1>
+            <p className="app-subtitle">
+              Monitor stats and run distributed search / select queries from a single interface.
+            </p>
+          </div>
+        </div>
+      </header>
 
-          {/* Search Form */}
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '15px',
-            marginBottom: '20px'
-          }}>
+      <main className="app-main">
+        {/* Database Statistics */}
+        <section className="card">
+          <div className="card-header">
             <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Title Query:
-              </label>
+              <h2 className="card-title">📊 Database Statistics</h2>
+              <p className="card-subtitle">
+                High-level aggregation across your distributed nodes.
+              </p>
+            </div>
+            <button className="btn btn-ghost" onClick={fetchAggregations}>
+              Refresh
+            </button>
+          </div>
+
+          {aggError && <div className="alert alert-error">{aggError}</div>}
+
+          {loadingAggregations ? (
+            <p className="text-muted">Loading statistics…</p>
+          ) : aggregations ? (
+            <div className="stats-grid">
+              {Object.entries(aggregations).map(([key, value]) => (
+                <div key={key} className="stat-card">
+                  <div className="stat-label">
+                    {key
+                      .replace(/_/g, ' ')
+                      .replace(/\b\w/g, (l) => l.toUpperCase())}
+                  </div>
+                  <div className="stat-value">
+                    {typeof value === 'number'
+                      ? value.toLocaleString(undefined, {
+                          maximumFractionDigits: 4,
+                        })
+                      : value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted">No statistics available.</p>
+          )}
+        </section>
+
+        {/* Distributed Search System */}
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">🔎 Distributed Search</h2>
+              <p className="card-subtitle">
+                Search titles across all nodes using a unified endpoint.
+              </p>
+            </div>
+          </div>
+
+          <form className="form-row" onSubmit={handleSearch}>
+            <div className="form-group flex-2">
+              <label className="field-label">Search term</label>
               <input
                 type="text"
-                value={titleQuery}
-                onChange={(e) => setTitleQuery(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-                placeholder="e.g., Matrix"
+                className="input"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Enter title keyword…"
               />
             </div>
 
-            <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Min Rating:
-              </label>
+            <div className="form-group">
+              <label className="field-label">Limit</label>
               <input
                 type="number"
-                step="0.1"
-                value={minRating}
-                onChange={(e) => setMinRating(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
+                className="input"
+                value={limit}
+                min={1}
+                max={100}
+                onChange={(e) => setLimit(Number(e.target.value))}
               />
             </div>
 
-            <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Max Rating:
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={maxRating}
-                onChange={(e) => setMaxRating(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
+            <div className="form-group align-end">
+              <button type="submit" className="btn btn-primary">
+                {loading ? 'Searching…' : 'Search'}
+              </button>
             </div>
+          </form>
 
-            <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Min Votes:
-              </label>
-              <input
-                type="number"
-                value={minVotes}
-                onChange={(e) => setMinVotes(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
+          {error && <div className="alert alert-error">{error}</div>}
+
+          <div className="table-wrapper">
+            {loading && <p className="text-muted">Loading results…</p>}
+
+            {!loading && !hasSearched && (
+              <p className="empty-state">Run a search to see results here.</p>
+            )}
+
+            {!loading && hasSearched && results.length === 0 && !error && (
+              <p className="empty-state">No results found.</p>
+            )}
+
+            {!loading && results.length > 0 && (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {Object.keys(results[0]).map((col, idx) => (
+                      <th key={idx}>{col}</th>
+                    ))}
+                    <th>Edit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((val, j) => (
+                        <td key={j}>{String(val)}</td>
+                      ))}
+                      <td>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => handleEditClick(row)}
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
+
+        {/* Edit Popup */}
+        {showEditPopup && editRow && (
+          <div
+            className="modal-overlay"
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              width: '100vw',
+              height: '100vh',
+              background: 'rgba(0,0,0,0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000,
+            }}
+          >
+            <div
+              className="modal-content"
+              style={{
+                background: '#fff',
+                padding: 32,
+                borderRadius: 8,
+                minWidth: 350,
+                maxWidth: 500,
+                boxShadow: '0 2px 16px rgba(0,0,0,0.2)',
+              }}
+            >
+              <h3 style={{ marginTop: 0 }}>Edit Entry</h3>
+              <form>
+                {Object.entries(editRow).map(([key, value]) => (
+                  <div key={key} style={{ marginBottom: 16 }}>
+                    <label
+                      style={{
+                        display: 'block',
+                        fontWeight: 500,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {key}
+                    </label>
+                    <input
+                      type="text"
+                      value={value}
+                      disabled={key === 'tconst'}
+                      style={{
+                        width: '100%',
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #bbb',
+                        background: key === 'tconst' ? '#eee' : '#fff',
+                      }}
+                      readOnly={key === 'tconst'}
+                    />
+                  </div>
+                ))}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    gap: 8,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={handleEditPopupClose}
+                  >
+                    Close
+                  </button>
+                  {/* Save button can be added here in the future */}
+                </div>
+              </form>
             </div>
+          </div>
+        )}
 
+        {/* Distributed Select System */}
+        <section className="card">
+          <div className="card-header">
             <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Result Limit:
-              </label>
-              <input
-                type="number"
-                value={resultLimit}
-                onChange={(e) => setResultLimit(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
+              <h2 className="card-title">📋 Distributed Select</h2>
+              <p className="card-subtitle">
+                Run ordered selects (TOP N) over distributed title data.
+              </p>
             </div>
           </div>
 
-          <button
-            onClick={handleSearch}
-            style={{
-              padding: '12px 30px',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              backgroundColor: '#61dafb',
-              color: '#282c34',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginBottom: '20px'
-            }}
-          >
-            Search Titles
-          </button>
-
-          {/* Search Results */}
-          {loadingSearch && <p>Searching...</p>}
-
-          {errorSearch && (
-            <div style={{ color: 'red' }}>
-              <p>Error: {errorSearch}</p>
+          <form className="form-row" onSubmit={handleSelect}>
+            <div className="form-group">
+              <label className="field-label">Column</label>
+              <select
+                className="select"
+                value={selectColumn}
+                onChange={(e) => setSelectColumn(e.target.value)}
+              >
+                <option value="averageRating">averageRating</option>
+                <option value="numVotes">numVotes</option>
+                <option value="startYear">startYear</option>
+              </select>
             </div>
-          )}
 
-          {!loadingSearch && !errorSearch && searchResults.length > 0 && (
-            <div>
-              <h3>Results ({searchResults.length})</h3>
-              <div style={{ 
-                maxHeight: '500px', 
-                overflowY: 'auto',
-                marginTop: '15px'
-              }}>
-                <table style={{
-                  width: '100%',
-                  borderCollapse: 'collapse',
-                  fontSize: '14px'
-                }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#2a2a2a' }}>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>ID</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Title</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Rating</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Votes</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Genres</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {searchResults.map((title, index) => (
-                      <tr key={index} style={{ borderBottom: '1px solid #333' }}>
-                        <td style={{ padding: '10px' }}>{title.tconst}</td>
-                        <td style={{ padding: '10px', fontWeight: 'bold' }}>{title.title}</td>
-                        <td style={{ padding: '10px' }}>{title.averageRating}</td>
-                        <td style={{ padding: '10px' }}>{title.numVotes.toLocaleString()}</td>
-                        <td style={{ padding: '10px', fontSize: '12px' }}>{title.genres || 'N/A'}</td>
-                      </tr>
+            <div className="form-group">
+              <label className="field-label">Order</label>
+              <select
+                className="select"
+                value={orderDirection}
+                onChange={(e) => setOrderDirection(e.target.value)}
+              >
+                <option value="DESC">DESC</option>
+                <option value="ASC">ASC</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="field-label">Limit</label>
+              <input
+                type="number"
+                className="input"
+                value={selectLimit}
+                min={1}
+                max={100}
+                onChange={(e) => setSelectLimit(Number(e.target.value))}
+              />
+            </div>
+
+            <div className="form-group align-end">
+              <button type="submit" className="btn btn-primary">
+                {selectLoading ? 'Running…' : 'Select'}
+              </button>
+            </div>
+          </form>
+
+          {selectError && <div className="alert alert-error">{selectError}</div>}
+
+          <div className="table-wrapper">
+            {selectLoading && <p className="text-muted">Loading results…</p>}
+
+            {!selectLoading && !hasSelected && (
+              <p className="empty-state">Run a select query to see results here.</p>
+            )}
+
+            {!selectLoading &&
+              hasSelected &&
+              selectResults.length === 0 &&
+              !selectError && <p className="empty-state">No results found.</p>}
+
+            {!selectLoading && selectResults.length > 0 && (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {Object.keys(selectResults[0]).map((col, idx) => (
+                      <th key={idx}>{col}</th>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {!loadingSearch && !errorSearch && searchResults.length === 0 && (
-            <p style={{ color: '#aaa' }}>No results found. Try adjusting your filters.</p>
-          )}
-        </div>
-
-        {/* Top Movies of a Time Period Section */}
-        <div style={{ 
-          width: '90%', 
-          marginTop: '40px',
-          padding: '20px',
-          backgroundColor: '#1e1e1e',
-          borderRadius: '8px',
-          border: '1px solid #444'
-        }}>
-          <h2>Top Movies of a Time Period</h2>
-          <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '20px' }}>
-            Find the highest-rated title for each year within a date range
-          </p>
-
-          {/* Year Range Form */}
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '15px',
-            marginBottom: '20px'
-          }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Start Year:
-              </label>
-              <input
-                type="number"
-                value={startYear}
-                onChange={(e) => setStartYear(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                End Year:
-              </label>
-              <input
-                type="number"
-                value={endYear}
-                onChange={(e) => setEndYear(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Min Votes:
-              </label>
-              <input
-                type="number"
-                value={minVotesYear}
-                onChange={(e) => setMinVotesYear(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  border: '1px solid #555',
-                  backgroundColor: '#2a2a2a',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
-            </div>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectResults.map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((val, j) => (
+                        <td key={j}>{String(val)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-
-          <button
-            onClick={handleTopMoviesSearch}
-            style={{
-              padding: '12px 30px',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              backgroundColor: '#61dafb',
-              color: '#282c34',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginBottom: '20px'
-            }}
-          >
-            Find Top Movies
-          </button>
-
-          {/* Results */}
-          {loadingTopMovies && <p>Loading top movies...</p>}
-
-          {errorTopMovies && (
-            <div style={{ color: 'red' }}>
-              <p>Error: {errorTopMovies}</p>
-            </div>
-          )}
-
-          {!loadingTopMovies && !errorTopMovies && topMoviesByYear.length > 0 && (
-            <div>
-              <h3>Top Movie Per Year ({topMoviesByYear.length} years)</h3>
-              <div style={{ 
-                maxHeight: '500px', 
-                overflowY: 'auto',
-                marginTop: '15px'
-              }}>
-                <table style={{
-                  width: '100%',
-                  borderCollapse: 'collapse',
-                  fontSize: '14px'
-                }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#2a2a2a' }}>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Year</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Title</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Rating</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #444' }}>Genres</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {topMoviesByYear.map((movie, index) => (
-                      <tr key={index} style={{ borderBottom: '1px solid #333' }}>
-                        <td style={{ padding: '10px', fontWeight: 'bold' }}>{movie.startYear}</td>
-                        <td style={{ padding: '10px' }}>{movie.primaryTitle}</td>
-                        <td style={{ padding: '10px', color: '#61dafb' }}>{movie.highest}</td>
-                        <td style={{ padding: '10px', fontSize: '12px' }}>{movie.genres || 'N/A'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {!loadingTopMovies && !errorTopMovies && topMoviesByYear.length === 0 && (
-            <p style={{ color: '#aaa' }}>No results found. Try adjusting your year range.</p>
-          )}
-        </div>
-
-      </header>
+        </section>
+      </main>
     </div>
   );
 }
