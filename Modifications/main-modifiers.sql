@@ -6,10 +6,11 @@ DROP PROCEDURE IF EXISTS distributed_delete;
 DROP PROCEDURE IF EXISTS distributed_addReviews;
 DROP PROCEDURE IF EXISTS distributed_select;
 DROP PROCEDURE IF EXISTS distributed_search;
+DROP PROCEDURE IF EXISTS distributed_aggregation;
 
 DELIMITER $$
 
-CREATE PROCEDURE distributed_insert (
+CREATE PROCEDURE distributed_insert(
     IN new_tconst VARCHAR(12),
     IN new_primaryTitle VARCHAR(1024),
     IN new_runtimeMinutes SMALLINT UNSIGNED,
@@ -52,7 +53,7 @@ DELIMITER ;
 
 DELIMITER $$
 
-CREATE PROCEDURE distributed_update (
+CREATE PROCEDURE distributed_update(
     IN new_tconst VARCHAR(12),
     IN new_primaryTitle VARCHAR(1024),
     IN new_runtimeMinutes SMALLINT UNSIGNED,
@@ -131,7 +132,7 @@ DELIMITER ;
 
 DELIMITER $$
 
-CREATE PROCEDURE distributed_delete (
+CREATE PROCEDURE distributed_delete(
     IN new_tconst VARCHAR(12)
 )
 
@@ -157,7 +158,7 @@ DELIMITER ;
 
 DELIMITER $$
 
-CREATE PROCEDURE distributed_addReviews (
+CREATE PROCEDURE distributed_addReviews(
     IN new_tconst VARCHAR(12),
     IN num_new_reviews INT UNSIGNED,
     IN new_rating DECIMAL(3,1)
@@ -248,7 +249,7 @@ DELIMITER ;
 
 DELIMITER $$
 
-CREATE PROCEDURE distributed_select (
+CREATE PROCEDURE distributed_select(
     IN select_column VARCHAR(50),
     IN order_direction VARCHAR(4),
     IN limit_count INT UNSIGNED
@@ -354,7 +355,7 @@ DELIMITER ;
 
 DELIMITER $$
 
-CREATE PROCEDURE distributed_search (
+CREATE PROCEDURE distributed_search(
     IN search_term VARCHAR(1024),
     IN limit_count INT UNSIGNED
 )
@@ -373,6 +374,23 @@ BEGIN
     WHERE primaryTitle LIKE CONCAT('%', search_term, '%')
     ORDER BY weightedRating DESC
     LIMIT limit_count;
+
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+
+CREATE PROCEDURE distributed_aggregation()
+
+BEGIN
+    SELECT 
+        COUNT(*) AS movie_count,
+        AVG(averageRating) AS average_rating,
+        AVG(weightedRating) AS average_weightedRating,
+        SUM(numVotes) AS total_votes,
+        AVG(numVotes) AS average_votes
+    FROM `stadvdb-mco2`.title_ft;
 
 END$$
 
