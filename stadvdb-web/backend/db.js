@@ -19,10 +19,10 @@ const promisePool = pool.promise();
 // Test the connection
 pool.getConnection((err, connection) => {
   if (err) {
-    console.error('❌ Error connecting to MySQL database:', err.message);
+    console.error('Error connecting to MySQL database:', err.message);
     return;
   }
-  console.log('✅ Successfully connected to MySQL database: stadvdb-mco2');
+  console.log(`Successfully connected to MySQL database: ${process.env.DB_NAME}`);
   connection.release();
 });
 

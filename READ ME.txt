@@ -1,15 +1,62 @@
-this is the .env:
+SETUP INSTRUCTIONS
 
+Relevant IMDB Imports
+name.basics.tsv
+title.basics.tsv
+title.ratings.tsv
+- Put in a folder named imdbdata/modify the file path for you
+
+ENV FILES
+/stadvdb-web/backend .env files needed
+
+> .env.main
 DB_HOST=localhost
 DB_USER=root
 DB_PASSWORD=fuckingpassword
 DB_NAME=stadvdb-mco2
 DB_PORT=3306
-
-# Server Configuration
 PORT=5000
 
-When getting the imdb data:
-name.basics.tsv
-title.basics.tsv
-title.ratings.tsv
+> .env.a
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=fuckingpassword
+DB_NAME=stadvdb-mco2-a
+DB_PORT=3306
+PORT=5001
+
+> .env.b
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=fuckingpassword
+DB_NAME=stadvdb-mco2-b
+DB_PORT=3306
+PORT=5002
+
+INSTALLS
+cd stadvdb-web
+npm install
+
+cd stadvdb-web/backend
+npm install
+
+Start All Backend Servers
+From the stadvdb-web/backend folder, run:
+	npm start
+
+This will launch three backend servers:
+- http://localhost:5000 (main)
+- http://localhost:5001 (A)
+- http://localhost:5002 (B)
+
+Frontend Env File
+In stadvdb-web/ create .env file:
+	REACT_APP_API_URL=http://localhost:5000
+- Change to 5001 or 5002
+
+To start it, start in the backend then the root folder of the web
+/stadvdb-web/backend
+npm start
+
+/stadvdb-web
+npm start
