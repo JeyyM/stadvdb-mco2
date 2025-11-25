@@ -12,6 +12,63 @@ app.use(express.json());
 
 // ============================================================================
 // API ROUTES
+// Distributed delete system
+app.post('/api/titles/distributed-delete', async (req, res) => {
+  try {
+    const { tconst } = req.body;
+    if (!tconst) {
+      return res.status(400).json({ success: false, message: 'tconst is required' });
+    }
+    const [results] = await db.query('CALL distributed_delete(?)', [tconst]);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Error in distributed_delete:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in distributed_delete',
+      error: error.message
+    });
+  }
+});
+// Distributed update system
+app.post('/api/titles/distributed-update', async (req, res) => {
+  try {
+    const {
+      tconst,
+      primaryTitle,
+      runtimeMinutes,
+      averageRating,
+      numVotes,
+      startYear
+    } = req.body;
+
+    // Validate required fields
+    if (!tconst) {
+      return res.status(400).json({ success: false, message: 'tconst is required' });
+    }
+
+    // Call the stored procedure (6 args)
+    const [results] = await db.query(
+      'CALL distributed_update(?, ?, ?, ?, ?, ?)',
+      [
+        tconst,
+        primaryTitle,
+        runtimeMinutes,
+        averageRating,
+        numVotes,
+        startYear
+      ]
+    );
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Error in distributed_update:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in distributed_update',
+      error: error.message
+    });
+  }
+});
 // ============================================================================
 
 // Distributed select system
@@ -62,7 +119,6 @@ app.get('/api/test', (req, res) => {
 app.get('/api/aggregation', async (req, res) => {
   try {
     const [results] = await db.query('CALL distributed_aggregation()');
-    console.log('Raw aggregation results:', results);
     let agg = results[0] && results[0][0] ? results[0][0] : null;
     if (agg) {
       agg.movie_count = Number(agg.movie_count);
@@ -81,6 +137,46 @@ app.get('/api/aggregation', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching aggregations',
+      error: error.message
+    });
+  }
+});
+
+// Distributed insert system
+app.post('/api/titles/distributed-insert', async (req, res) => {
+  try {
+    const {
+      tconst,
+      primaryTitle,
+      runtimeMinutes,
+      averageRating,
+      numVotes,
+      startYear
+    } = req.body;
+
+    // Validate required fields (6 args, weightedRating is now calculated in SQL)
+    if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    // Call the stored procedure (6 args)
+    const [results] = await db.query(
+      'CALL distributed_insert(?, ?, ?, ?, ?, ?)',
+      [
+        tconst,
+        primaryTitle,
+        runtimeMinutes,
+        averageRating,
+        numVotes,
+        startYear
+      ]
+    );
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Error in distributed_insert:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in distributed_insert',
       error: error.message
     });
   }
