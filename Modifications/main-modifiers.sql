@@ -16,11 +16,14 @@ CREATE PROCEDURE distributed_insert(
     IN new_runtimeMinutes SMALLINT UNSIGNED,
     IN new_averageRating DECIMAL(3,1),
     IN new_numVotes INT UNSIGNED,
-    IN new_startYear SMALLINT UNSIGNED,
-    IN new_weightedRating DECIMAL(4,2)
+    IN new_startYear SMALLINT UNSIGNED
 )
 
 BEGIN
+    DECLARE global_mean DECIMAL(3,1);
+    DECLARE min_votes_threshold INT;
+    DECLARE calculated_weightedRating DECIMAL(4,2);
+
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -29,21 +32,52 @@ BEGIN
 
     START TRANSACTION;
 
+    -- Calculate global mean
+    SELECT AVG(averageRating) INTO global_mean
+    FROM `stadvdb-mco2`.title_ft
+    WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+
+    -- Calculate min_votes_threshold (95th percentile)
+    SET @percentile := 0.95;
+    SELECT COUNT(*) INTO @totalCount
+    FROM `stadvdb-mco2`.title_ft
+    WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+    SET @rank_position := CEIL(@percentile * @totalCount);
+    SET @rank_position := GREATEST(@rank_position, 1);
+    SELECT numVotes INTO min_votes_threshold
+    FROM (
+        SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
+        FROM `stadvdb-mco2`.title_ft
+        WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+    ) AS ordered_votes
+    WHERE row_num = @rank_position
+    LIMIT 1;
+
+    -- Calculate weightedRating
+    IF new_numVotes IS NULL OR new_numVotes = 0 THEN
+        SET calculated_weightedRating = global_mean;
+    ELSE
+        SET calculated_weightedRating = ROUND(
+            (new_numVotes / (new_numVotes + min_votes_threshold)) * new_averageRating
+            + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
+        );
+    END IF;
+
     INSERT INTO `stadvdb-mco2`.title_ft
       (tconst, primaryTitle, runtimeMinutes,
        averageRating, numVotes, startYear, weightedRating)
     VALUES
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
-       new_averageRating, new_numVotes, new_startYear, new_weightedRating);
+       new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
 
     IF new_startYear IS NULL OR new_startYear < 2010 THEN
         INSERT INTO `stadvdb-mco2-b`.title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, new_weightedRating);
+                new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
     ELSE
         INSERT INTO `stadvdb-mco2-a`.title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, new_weightedRating);
+                new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
     END IF;
 
     COMMIT;
@@ -59,13 +93,16 @@ CREATE PROCEDURE distributed_update(
     IN new_runtimeMinutes SMALLINT UNSIGNED,
     IN new_averageRating DECIMAL(3,1),
     IN new_numVotes INT UNSIGNED,
-    IN new_startYear SMALLINT UNSIGNED,
-    IN new_weightedRating DECIMAL(4,2)
+    IN new_startYear SMALLINT UNSIGNED
 )
+
 
 BEGIN
     DECLARE old_startYear SMALLINT UNSIGNED;
-    
+    DECLARE global_mean DECIMAL(3,1);
+    DECLARE min_votes_threshold INT;
+    DECLARE updated_weightedRating DECIMAL(4,2);
+
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
@@ -79,14 +116,37 @@ BEGIN
     FROM `stadvdb-mco2`.title_ft
     WHERE tconst = new_tconst;
 
-    -- Update main
+    SELECT AVG(averageRating) INTO global_mean
+    FROM `stadvdb-mco2`.title_ft
+    WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+
+    SET @percentile := 0.95;
+    SELECT COUNT(*) INTO @totalCount
+    FROM `stadvdb-mco2`.title_ft
+    WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+    SET @rank_position := CEIL(@percentile * @totalCount);
+    SET @rank_position := GREATEST(@rank_position, 1);
+    SELECT numVotes INTO min_votes_threshold
+    FROM (
+        SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
+        FROM `stadvdb-mco2`.title_ft
+        WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+    ) AS ordered_votes
+    WHERE row_num = @rank_position
+    LIMIT 1;
+
+    SET updated_weightedRating = ROUND(
+        (new_numVotes / (new_numVotes + min_votes_threshold)) * new_averageRating
+        + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
+    );
+
     UPDATE `stadvdb-mco2`.title_ft
     SET primaryTitle = new_primaryTitle,
         runtimeMinutes = new_runtimeMinutes,
         averageRating = new_averageRating,
         numVotes = new_numVotes,
         startYear = new_startYear,
-        weightedRating = new_weightedRating
+        weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
 
     -- Check if you need to move to a new node
@@ -95,13 +155,13 @@ BEGIN
         DELETE FROM `stadvdb-mco2-b`.title_ft WHERE tconst = new_tconst;
         INSERT INTO `stadvdb-mco2-a`.title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, new_weightedRating);
+                new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
     ELSEIF (old_startYear >= 2010) AND (new_startYear IS NULL OR new_startYear < 2010) THEN
         -- Moving from A to B
         DELETE FROM `stadvdb-mco2-a`.title_ft WHERE tconst = new_tconst;
         INSERT INTO `stadvdb-mco2-b`.title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, new_weightedRating);
+                new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
     ELSE
         -- Staying in the same node
         IF new_startYear IS NULL OR new_startYear < 2010 THEN
@@ -111,7 +171,7 @@ BEGIN
                 averageRating = new_averageRating,
                 numVotes = new_numVotes,
                 startYear = new_startYear,
-                weightedRating = new_weightedRating
+                weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
         ELSE
             UPDATE `stadvdb-mco2-a`.title_ft
@@ -120,7 +180,7 @@ BEGIN
                 averageRating = new_averageRating,
                 numVotes = new_numVotes,
                 startYear = new_startYear,
-                weightedRating = new_weightedRating
+                weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
         END IF;
     END IF;
@@ -160,7 +220,7 @@ DELIMITER $$
 
 CREATE PROCEDURE distributed_addReviews(
     IN new_tconst VARCHAR(12),
-    IN num_new_reviews INT UNSIGNED,
+    IN num_new_reviews INT,
     IN new_rating DECIMAL(3,1)
 )
 
@@ -177,6 +237,12 @@ BEGIN
     DECLARE min_votes_threshold INT;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
+
+    IF num_new_reviews < 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'num_new_reviews cannot be negative';
+    END IF;
+
     BEGIN
         ROLLBACK;
         RESIGNAL;
@@ -210,17 +276,26 @@ BEGIN
     WHERE row_num = @rank_position
     LIMIT 1;
 
-    SET updated_numVotes = current_numVotes + num_new_reviews;
-    SET updated_averageRating = ROUND(
-        ((current_averageRating * current_numVotes) + (new_rating * num_new_reviews)) / updated_numVotes,
-        1
-    );
 
-    -- Formula: (v / (v + m)) * r + (m / (v + m)) * g
-    SET updated_weightedRating = ROUND(
-        (updated_numVotes / (updated_numVotes + min_votes_threshold)) * updated_averageRating
-        + (min_votes_threshold / (updated_numVotes + min_votes_threshold)) * global_mean, 2
-    );
+    SET updated_numVotes = current_numVotes + num_new_reviews;
+    IF updated_numVotes < 0 THEN
+        SET updated_numVotes = 0;
+    END IF;
+
+    IF updated_numVotes = 0 THEN
+        SET updated_averageRating = NULL;
+        SET updated_weightedRating = global_mean;
+    ELSE
+        SET updated_averageRating = ROUND(
+            ((current_averageRating * current_numVotes) + (new_rating * num_new_reviews)) / updated_numVotes,
+            1
+        );
+        -- Formula: (v / (v + m)) * r + (m / (v + m)) * g
+        SET updated_weightedRating = ROUND(
+            (updated_numVotes / (updated_numVotes + min_votes_threshold)) * updated_averageRating
+            + (min_votes_threshold / (updated_numVotes + min_votes_threshold)) * global_mean, 2
+        );
+    END IF;
 
     UPDATE `stadvdb-mco2`.title_ft
     SET numVotes = updated_numVotes,
