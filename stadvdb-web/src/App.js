@@ -299,7 +299,7 @@ function App() {
                 className="input"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Enter title substring"
+                placeholder="e.g. The Matrix"
               />
             </div>
 
