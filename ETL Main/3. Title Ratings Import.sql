@@ -9,7 +9,7 @@ CREATE TABLE title_ratings (
   numVotes INT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-LOAD DATA LOCAL INFILE 'C:\\Users\\asus\\Desktop\\STADVDB Main Node\\imdbdata\\title.ratings.tsv'
+LOAD DATA LOCAL INFILE 'C:\\Users\\asus\\Desktop\\STADVDB NEW\\imdbdata\\title.ratings.tsv'
 INTO TABLE title_ratings
 CHARACTER SET utf8mb4
 FIELDS TERMINATED BY '\t' ESCAPED BY '\\'
