@@ -28,7 +28,7 @@ CREATE TABLE name_basics (
   knownForTitles TEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-LOAD DATA LOCAL INFILE 'C:\\Users\\asus\\Desktop\\STADVDB NEW\\imdbdata\\name.basics.tsv'
+LOAD DATA LOCAL INFILE 'C:\\Users\\zan_laptop\\Desktop\\stadvdb-mco2-stuff\\imdbdata\\name.basics.tsv'
 INTO TABLE name_basics
 CHARACTER SET utf8mb4
 FIELDS TERMINATED BY '\t' ESCAPED BY '\\'
