@@ -1,4 +1,4 @@
-USE `stadvdb-mco2-a`;
+USE `stadvdb-mco2-b`;
 
 DROP PROCEDURE IF EXISTS distributed_insert;
 DROP PROCEDURE IF EXISTS distributed_update;
