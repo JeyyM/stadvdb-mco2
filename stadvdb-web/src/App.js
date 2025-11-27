@@ -2,19 +2,14 @@ import { useState, useEffect } from 'react';
 import './App.css';
 
 function App() {
-  // Edit popup state
-  const [editRow, setEditRow] = useState(null);
   const [showEditPopup, setShowEditPopup] = useState(false);
-
-  const handleEditClick = (row) => {
-    setEditRow(row);
-    setShowEditPopup(true);
-  };
-
-  const handleEditPopupClose = () => {
-    setShowEditPopup(false);
-    setEditRow(null);
-  };
+  // Track if popup is open for disabling buttons
+  const popupActive = showEditPopup;
+  const [editRow, setEditRow] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [editSuccess, setEditSuccess] = useState(null);
 
   const [aggregations, setAggregations] = useState(null);
   const [loadingAggregations, setLoadingAggregations] = useState(true);
@@ -37,6 +32,123 @@ function App() {
   const [selectError, setSelectError] = useState(null);
   const [hasSelected, setHasSelected] = useState(false);
 
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const handleDelete = async () => {
+    if (!editForm.tconst) return;
+    if (!window.confirm('Are you sure you want to delete this entry?')) return;
+    setDeleteLoading(true);
+    setEditError(null);
+    try {
+      const res = await fetch('http://localhost:5000/api/titles/distributed-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tconst: editForm.tconst }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEditSuccess('Deleted successfully!');
+        setTimeout(() => {
+          setShowEditPopup(false);
+          setEditRow(null);
+          setEditSuccess(null);
+          handleSearch({ preventDefault: () => {} }); // Refresh results
+        }, 800);
+      } else {
+        setEditError(data.message || 'Delete failed');
+      }
+    } catch (err) {
+      setEditError('Delete failed');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // When opening the popup, initialize editForm
+  useEffect(() => {
+    if (showEditPopup && editRow) {
+      setEditForm({
+        tconst: editRow.tconst || '',
+        primaryTitle: editRow.primaryTitle || '',
+        startYear: editRow.startYear || '',
+        averageRating: editRow.averageRating || '',
+        numVotes: editRow.numVotes || '',
+        runtimeMinutes: editRow.runtimeMinutes || '',
+        weightedRating: editRow.weightedRating || '',
+      });
+      setEditError(null);
+      setEditSuccess(null);
+    }
+  }, [showEditPopup, editRow]);
+
+  const handleEditFormChange = (e) => {
+    const { name, value } = e.target;
+    setEditForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleEditSave = async (e) => {
+    e.preventDefault();
+    setEditLoading(true);
+    setEditError(null);
+    setEditSuccess(null);
+    try {
+      let url, body;
+      if (editRow) {
+        url = 'http://localhost:5000/api/titles/distributed-update';
+        body = JSON.stringify({
+          tconst: editForm.tconst,
+          primaryTitle: editForm.primaryTitle,
+          runtimeMinutes: editForm.runtimeMinutes,
+          averageRating: editForm.averageRating,
+          numVotes: editForm.numVotes,
+          startYear: editForm.startYear,
+        });
+      } else {
+        url = 'http://localhost:5000/api/titles/distributed-insert';
+        body = JSON.stringify({
+          tconst: editForm.tconst,
+          primaryTitle: editForm.primaryTitle,
+          runtimeMinutes: editForm.runtimeMinutes,
+          averageRating: editForm.averageRating,
+          numVotes: editForm.numVotes,
+          startYear: editForm.startYear,
+          weightedRating: editForm.weightedRating,
+        });
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEditSuccess(editRow ? 'Update successful!' : 'Insert successful!');
+        setTimeout(() => {
+          setShowEditPopup(false);
+          setEditRow(null);
+          setEditSuccess(null);
+          handleSearch({ preventDefault: () => {} }); // Refresh results
+        }, 1000);
+      } else {
+        setEditError(data.message || (editRow ? 'Update failed' : 'Insert failed'));
+      }
+    } catch (err) {
+      setEditError(editRow ? 'Update failed' : 'Insert failed');
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const handleEditClick = (row) => {
+    setEditRow(row);
+    setShowEditPopup(true);
+  };
+
+  const handleEditPopupClose = () => {
+    setShowEditPopup(false);
+    setEditRow(null);
+  };
+
   useEffect(() => {
     fetchAggregations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -50,7 +162,6 @@ function App() {
       .then((data) => {
         setAggregations(data.data);
         setLoadingAggregations(false);
-        console.log('Aggregation results:', data);
       })
       .catch((error) => {
         setAggError('Failed to load statistics');
@@ -129,23 +240,16 @@ function App() {
       <header className="app-header">
         <div className="app-header-inner">
           <div>
-            <h1 className="app-title">Distributed IMDB Dashboard</h1>
-            <p className="app-subtitle">
-              Monitor stats and run distributed search / select queries from a single interface.
-            </p>
+            <h1 className="app-title">Distributed IMDB Database</h1>
           </div>
         </div>
       </header>
 
       <main className="app-main">
-        {/* Database Statistics */}
         <section className="card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">📊 Database Statistics</h2>
-              <p className="card-subtitle">
-                High-level aggregation across your distributed nodes.
-              </p>
+              <h2 className="card-title">Database Statistics</h2>
             </div>
             <button className="btn btn-ghost" onClick={fetchAggregations}>
               Refresh
@@ -180,26 +284,22 @@ function App() {
           )}
         </section>
 
-        {/* Distributed Search System */}
         <section className="card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">🔎 Distributed Search</h2>
-              <p className="card-subtitle">
-                Search titles across all nodes using a unified endpoint.
-              </p>
+              <h2 className="card-title">Distributed Search</h2>
             </div>
           </div>
 
           <form className="form-row" onSubmit={handleSearch}>
             <div className="form-group flex-2">
-              <label className="field-label">Search term</label>
+              <label className="field-label">Search Term</label>
               <input
                 type="text"
                 className="input"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Enter title keyword…"
+                placeholder="Enter title substring"
               />
             </div>
 
@@ -224,51 +324,55 @@ function App() {
 
           {error && <div className="alert alert-error">{error}</div>}
 
-          <div className="table-wrapper">
-            {loading && <p className="text-muted">Loading results…</p>}
+          {!error && (
+            <div className="table-wrapper" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 80 }}>
+              {loading && (
+                <p className="text-muted" style={{ margin: 0, textAlign: 'center', width: '100%' }}>Loading results…</p>
+              )}
 
-            {!loading && !hasSearched && (
-              <p className="empty-state">Run a search to see results here.</p>
-            )}
+              {!loading && !hasSearched && (
+                <p className="empty-state">Run a search to see results here.</p>
+              )}
 
-            {!loading && hasSearched && results.length === 0 && !error && (
-              <p className="empty-state">No results found.</p>
-            )}
+              {!loading && hasSearched && results.length === 0 && !error && (
+                <p className="empty-state">No results found.</p>
+              )}
 
-            {!loading && results.length > 0 && (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {Object.keys(results[0]).map((col, idx) => (
-                      <th key={idx}>{col}</th>
-                    ))}
-                    <th>Edit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.map((row, i) => (
-                    <tr key={i}>
-                      {Object.values(row).map((val, j) => (
-                        <td key={j}>{String(val)}</td>
+              {!loading && results.length > 0 && (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {Object.keys(results[0]).map((col, idx) => (
+                        <th key={idx}>{col}</th>
                       ))}
-                      <td>
-                        <button
-                          className="btn btn-secondary"
-                          onClick={() => handleEditClick(row)}
-                        >
-                          Edit
-                        </button>
-                      </td>
+                      <th>Edit</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+                  </thead>
+                  <tbody>
+                    {results.map((row, i) => (
+                      <tr key={i}>
+                        {Object.values(row).map((val, j) => (
+                          <td key={j}>{String(val)}</td>
+                        ))}
+                        <td>
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => handleEditClick(row)}
+                            disabled={popupActive}
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </section>
 
-        {/* Edit Popup */}
-        {showEditPopup && editRow && (
+        {showEditPopup && (
           <div
             className="modal-overlay"
             style={{
@@ -283,6 +387,7 @@ function App() {
               justifyContent: 'center',
               zIndex: 1000,
             }}
+            onClick={undefined}
           >
             <div
               className="modal-content"
@@ -291,38 +396,152 @@ function App() {
                 padding: 32,
                 borderRadius: 8,
                 minWidth: 350,
-                maxWidth: 500,
+                maxWidth: 600,
                 boxShadow: '0 2px 16px rgba(0,0,0,0.2)',
               }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <h3 style={{ marginTop: 0 }}>Edit Entry</h3>
-              <form>
-                {Object.entries(editRow).map(([key, value]) => (
-                  <div key={key} style={{ marginBottom: 16 }}>
-                    <label
-                      style={{
-                        display: 'block',
-                        fontWeight: 500,
-                        marginBottom: 4,
-                      }}
-                    >
-                      {key}
+              <h3 style={{ marginTop: 0 }}>{editRow ? 'Edit Entry' : 'Add Title'}</h3>
+              <form onSubmit={handleEditSave}>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                      tconst
                     </label>
                     <input
                       type="text"
-                      value={value}
-                      disabled={key === 'tconst'}
+                      name="tconst"
+                      value={editForm.tconst || ''}
+                      disabled={!!editRow}
+                      onChange={handleEditFormChange}
+                      placeholder="e.g. tt1234567"
                       style={{
                         width: '100%',
                         padding: 8,
                         borderRadius: 4,
                         border: '1px solid #bbb',
-                        background: key === 'tconst' ? '#eee' : '#fff',
                       }}
-                      readOnly={key === 'tconst'}
+                      readOnly={!!editRow}
                     />
                   </div>
-                ))}
+                  <div style={{ flex: 2 }}>
+                    <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                      primaryTitle
+                    </label>
+                    <input
+                      type="text"
+                      name="primaryTitle"
+                      value={editForm.primaryTitle || ''}
+                      onChange={handleEditFormChange}
+                      placeholder="e.g. The Matrix"
+                      style={{
+                        width: '100%',
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #bbb',
+                      }}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                      startYear
+                    </label>
+                    <input
+                      type="text"
+                      name="startYear"
+                      value={editForm.startYear || ''}
+                      onChange={handleEditFormChange}
+                      placeholder="e.g. 1999"
+                      style={{
+                        width: '100%',
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #bbb',
+                      }}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                      runtimeMinutes
+                    </label>
+                    <input
+                      type="text"
+                      name="runtimeMinutes"
+                      value={editForm.runtimeMinutes || ''}
+                      onChange={handleEditFormChange}
+                      placeholder="e.g. 120"
+                      style={{
+                        width: '100%',
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #bbb',
+                      }}
+                    />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                      averageRating
+                    </label>
+                    <input
+                      type="text"
+                      name="averageRating"
+                      value={editForm.averageRating || ''}
+                      onChange={handleEditFormChange}
+                      placeholder="e.g. 8.7"
+                      style={{
+                        width: '100%',
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #bbb',
+                      }}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                      numVotes
+                    </label>
+                    <input
+                      type="text"
+                      name="numVotes"
+                      value={editForm.numVotes || ''}
+                      onChange={handleEditFormChange}
+                      placeholder="e.g. 10000"
+                      style={{
+                        width: '100%',
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #bbb',
+                      }}
+                    />
+                  </div>
+                  {!!editRow && (
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                        weightedRating
+                      </label>
+                      <input
+                        type="text"
+                        name="weightedRating"
+                        value={editForm.weightedRating || ''}
+                        disabled
+                        style={{
+                          width: '100%',
+                          padding: 8,
+                          borderRadius: 4,
+                          border: '1px solid #bbb',
+                          background: '#f5f5f5',
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                <input type="hidden" name="runtimeMinutes" value={editForm.runtimeMinutes || ''} />
+                {editError && <div style={{ color: 'red', marginBottom: 8 }}>{editError}</div>}
+                {editSuccess && (
+                  <div style={{ color: 'green', marginBottom: 8 }}>{editSuccess}</div>
+                )}
                 <div
                   style={{
                     display: 'flex',
@@ -334,25 +553,68 @@ function App() {
                     type="button"
                     className="btn btn-secondary"
                     onClick={handleEditPopupClose}
+                    disabled={editLoading || deleteLoading}
                   >
                     Close
                   </button>
-                  {/* Save button can be added here in the future */}
+                  {!!editRow && (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      style={{
+                        background: (deleteLoading || editLoading) ? '#f5bdbd' : '#d32f2f',
+                        color: (deleteLoading || editLoading) ? '#888' : '#fff',
+                        border: 'none',
+                        opacity: (deleteLoading || editLoading) ? 0.6 : 1,
+                        cursor: (deleteLoading || editLoading) ? 'not-allowed' : 'pointer',
+                      }}
+                      onClick={handleDelete}
+                      disabled={deleteLoading || editLoading}
+                    >
+                      {deleteLoading ? 'Deleting...' : 'Delete'}
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{ background: '#1976d2', color: '#fff', border: 'none' }}
+                    disabled={editLoading || deleteLoading}
+                  >
+                    {editLoading ? 'Saving...' : !!editRow ? 'Edit' : 'Add'}
+                  </button>
                 </div>
               </form>
             </div>
           </div>
         )}
 
-        {/* Distributed Select System */}
         <section className="card">
-          <div className="card-header">
+          <div
+            className="card-header"
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          >
             <div>
-              <h2 className="card-title">📋 Distributed Select</h2>
-              <p className="card-subtitle">
-                Run ordered selects (TOP N) over distributed title data.
-              </p>
+              <h2 className="card-title">Distributed Select</h2>
             </div>
+            <button
+              className="btn btn-primary"
+              style={{ minWidth: 120 }}
+              onClick={() => {
+                setEditRow(null);
+                setEditForm({
+                  tconst: '',
+                  primaryTitle: '',
+                  startYear: '',
+                  averageRating: '',
+                  numVotes: '',
+                  runtimeMinutes: '',
+                });
+                setShowEditPopup(true);
+              }}
+              disabled={popupActive}
+            >
+              Add Title
+            </button>
           </div>
 
           <form className="form-row" onSubmit={handleSelect}>
@@ -363,12 +625,12 @@ function App() {
                 value={selectColumn}
                 onChange={(e) => setSelectColumn(e.target.value)}
               >
-                <option value="averageRating">averageRating</option>
-                <option value="numVotes">numVotes</option>
-                <option value="startYear">startYear</option>
+                <option value="averageRating">Average Rating</option>
+                <option value="numVotes">Vote Count</option>
+                <option value="startYear">Release Year</option>
+                <option value="primaryTitle">Title </option>
               </select>
             </div>
-
             <div className="form-group">
               <label className="field-label">Order</label>
               <select
@@ -376,11 +638,10 @@ function App() {
                 value={orderDirection}
                 onChange={(e) => setOrderDirection(e.target.value)}
               >
-                <option value="DESC">DESC</option>
-                <option value="ASC">ASC</option>
+                <option value="DESC">Descending</option>
+                <option value="ASC">Ascending</option>
               </select>
             </div>
-
             <div className="form-group">
               <label className="field-label">Limit</label>
               <input
@@ -392,7 +653,6 @@ function App() {
                 onChange={(e) => setSelectLimit(Number(e.target.value))}
               />
             </div>
-
             <div className="form-group align-end">
               <button type="submit" className="btn btn-primary">
                 {selectLoading ? 'Running…' : 'Select'}
@@ -402,18 +662,16 @@ function App() {
 
           {selectError && <div className="alert alert-error">{selectError}</div>}
 
-          <div className="table-wrapper">
-            {selectLoading && <p className="text-muted">Loading results…</p>}
-
-            {!selectLoading && !hasSelected && (
-              <p className="empty-state">Run a select query to see results here.</p>
+          <div className="table-wrapper" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 80 }}>
+            {selectLoading && (
+              <p className="text-muted" style={{ margin: 0, textAlign: 'center', width: '100%' }}>Loading Results…</p>
             )}
-
-            {!selectLoading &&
-              hasSelected &&
-              selectResults.length === 0 &&
-              !selectError && <p className="empty-state">No results found.</p>}
-
+            {!selectLoading && !hasSelected && (
+              <p className="empty-state">Run a select to see results here.</p>
+            )}
+            {!selectLoading && hasSelected && selectResults.length === 0 && !selectError && (
+              <p className="empty-state">No select results found.</p>
+            )}
             {!selectLoading && selectResults.length > 0 && (
               <table className="data-table">
                 <thead>
