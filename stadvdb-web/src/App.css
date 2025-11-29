@@ -38,7 +38,7 @@ body {
   color: var(--text-main);
 }
 
-/* Root layout */
+/* Root layout  */
 
 .app-root {
   display: flex;
