@@ -235,12 +235,21 @@ function App() {
     }
   };
 
+  // Determine which node we're connected to based on the API URL port
+  const getNodeName = () => {
+    const apiUrl = process.env.REACT_APP_API_URL || '';
+    if (apiUrl.includes(':60751')) return 'Main Node';
+    if (apiUrl.includes(':60752')) return 'Node A';
+    if (apiUrl.includes(':60753')) return 'Node B';
+    return 'Unknown Node';
+  };
+
   return (
     <div className="App app-root">
       <header className="app-header">
         <div className="app-header-inner">
           <div>
-            <h1 className="app-title">Distributed IMDB Database</h1>
+            <h1 className="app-title">Distributed IMDB Database ({getNodeName()})</h1>
           </div>
         </div>
       </header>
