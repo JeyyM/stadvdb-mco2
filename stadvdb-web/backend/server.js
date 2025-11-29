@@ -8,7 +8,20 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 /// Middleware
-app.use(cors());
+// Updated CORS to allow Vercel deployments
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:60751',
+    'http://localhost:60752',
+    'http://localhost:60753',
+    /\.vercel\.app$/, // Allow all Vercel deployments
+    /\.onrender\.com$/ // Allow Render deployments
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ============================================================================
