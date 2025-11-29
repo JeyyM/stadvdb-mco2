@@ -50,11 +50,15 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     if (!tconst || !primaryTitle) return res.status(400).json({ success: false, message: 'Required fields missing' });
 
-    const currentNode = process.env.DB_NAME; 
-    const isMainNode = currentNode === 'stadvdb-mco2';
-    
-    let target = isMainNode ? ((startYear < 2010) ? 'NODE_B' : 'NODE_A') : 'MAIN';
-    
+    // Validate required fields
+    if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    // --- RECOVERY LOGIC START ---
+    // Determine which node this SHOULD go to based on fragmentation rules
+    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
+    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     const transactionId = await RecoveryManager.logTransaction('INSERT', target, sql, params);
@@ -99,9 +103,15 @@ app.post('/api/titles/distributed-update', async (req, res) => {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     if (!tconst) return res.status(400).json({ success: false, message: 'tconst required' });
 
-    const currentNode = process.env.DB_NAME; 
-    const isMainNode = currentNode === 'stadvdb-mco2';
-    
+    if (!tconst) {
+      return res.status(400).json({ success: false, message: 'tconst is required' });
+    }
+
+    // --- RECOVERY LOGIC START ---
+    // For updates, the target node might change if startYear changes
+    // but primarily we track where the data *ends up*
+    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
+    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     const transactionId = await RecoveryManager.logTransaction('UPDATE', isMainNode ? 'NODES' : 'MAIN', sql, params);
