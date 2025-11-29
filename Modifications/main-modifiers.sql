@@ -10,6 +10,8 @@ DROP PROCEDURE IF EXISTS distributed_aggregation;
 
 DELIMITER $$
 
+DELIMITER $$
+
 CREATE PROCEDURE distributed_insert(
     IN new_tconst VARCHAR(12),
     IN new_primaryTitle VARCHAR(1024),
@@ -18,7 +20,6 @@ CREATE PROCEDURE distributed_insert(
     IN new_numVotes INT UNSIGNED,
     IN new_startYear SMALLINT UNSIGNED
 )
-
 BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
@@ -32,18 +33,17 @@ BEGIN
 
     START TRANSACTION;
 
-    -- Calculate global mean
     SELECT AVG(averageRating) INTO global_mean
     FROM `stadvdb-mco2`.title_ft
     WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
 
-    -- Calculate min_votes_threshold (95th percentile)
     SET @percentile := 0.95;
     SELECT COUNT(*) INTO @totalCount
     FROM `stadvdb-mco2`.title_ft
     WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
     SET @rank_position := CEIL(@percentile * @totalCount);
     SET @rank_position := GREATEST(@rank_position, 1);
+    
     SELECT numVotes INTO min_votes_threshold
     FROM (
         SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
@@ -53,7 +53,6 @@ BEGIN
     WHERE row_num = @rank_position
     LIMIT 1;
 
-    -- Calculate weightedRating
     IF new_numVotes IS NULL OR new_numVotes = 0 THEN
         SET calculated_weightedRating = global_mean;
     ELSE
@@ -71,11 +70,11 @@ BEGIN
        new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
 
     IF new_startYear IS NULL OR new_startYear < 2010 THEN
-        INSERT INTO `stadvdb-mco2-b`.title_ft
+        INSERT IGNORE INTO `stadvdb-mco2-b`.title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
     ELSE
-        INSERT INTO `stadvdb-mco2-a`.title_ft
+        INSERT IGNORE INTO `stadvdb-mco2-a`.title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
     END IF;
