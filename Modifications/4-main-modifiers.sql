@@ -7,6 +7,38 @@ DROP PROCEDURE IF EXISTS distributed_addReviews;
 DROP PROCEDURE IF EXISTS distributed_select;
 DROP PROCEDURE IF EXISTS distributed_search;
 DROP PROCEDURE IF EXISTS distributed_aggregation;
+DROP PROCEDURE IF EXISTS log_to_remote_node;
+
+DELIMITER $$
+
+-- Helper procedure to log to remote node's transaction_log
+CREATE PROCEDURE log_to_remote_node(
+    IN target_node VARCHAR(10),  -- 'NODE_A' or 'NODE_B'
+    IN txn_id VARCHAR(36),
+    IN seq INT,
+    IN log_t VARCHAR(10),  -- 'BEGIN', 'MODIFY', 'COMMIT', 'ABORT'
+    IN tbl_name VARCHAR(64),
+    IN rec_id VARCHAR(12),
+    IN col_name VARCHAR(64),
+    IN old_val TEXT,
+    IN new_val TEXT,
+    IN op_type VARCHAR(10)  -- 'INSERT', 'UPDATE', 'DELETE'
+)
+BEGIN
+    IF target_node = 'NODE_A' THEN
+        INSERT INTO transaction_log_node_a
+        (transaction_id, log_sequence, log_type, table_name, record_id, 
+         column_name, old_value, new_value, operation_type, source_node, timestamp)
+        VALUES (txn_id, seq, log_t, tbl_name, rec_id, col_name, old_val, new_val, op_type, 'MAIN', NOW(6));
+    ELSEIF target_node = 'NODE_B' THEN
+        INSERT INTO transaction_log_node_b
+        (transaction_id, log_sequence, log_type, table_name, record_id, 
+         column_name, old_value, new_value, operation_type, source_node, timestamp)
+        VALUES (txn_id, seq, log_t, tbl_name, rec_id, col_name, old_val, new_val, op_type, 'MAIN', NOW(6));
+    END IF;
+END$$
+
+DELIMITER ;
 
 DELIMITER $$
 
@@ -91,13 +123,33 @@ BEGIN
     -- Use federated tables to insert into remote nodes
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
     IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
+        -- Log to Node A
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        
         INSERT INTO title_ft_node_a
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+                
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            NULL,
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', calculated_weightedRating, 'startYear', new_startYear),
+            'INSERT');
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
     ELSE
+        -- Log to Node B
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        
         INSERT INTO title_ft_node_b
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+                
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            NULL,
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', calculated_weightedRating, 'startYear', new_startYear),
+            'INSERT');
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
     END IF;
 
     -- Clear federated flag
@@ -207,19 +259,64 @@ BEGIN
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
     IF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
         -- Moving from B to A
+        -- Log BEGIN to Node A
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        
         DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+        
+        -- Log DELETE to Node B
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS', 
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
+            NULL, 'DELETE');
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        
         INSERT INTO title_ft_node_a
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
+                
+        -- Log INSERT to Node A
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            NULL,
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
+            'INSERT');
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        
     ELSEIF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
         -- Moving from A to B
+        -- Log BEGIN to Node B
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        
         DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
+        
+        -- Log DELETE to Node A
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
+            NULL, 'DELETE');
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        
         INSERT INTO title_ft_node_b
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
+                
+        -- Log INSERT to Node B
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            NULL,
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
+            'INSERT');
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        
     ELSE
         -- Staying in the same node
         IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
+            -- Log to Node A
+            CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+            
             UPDATE title_ft_node_a
             SET primaryTitle = new_primaryTitle,
                 runtimeMinutes = new_runtimeMinutes,
@@ -228,7 +325,18 @@ BEGIN
                 startYear = new_startYear,
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
+            
+            CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
+                'UPDATE');
+            CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
         ELSE
+            -- Log to Node B
+            CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+            
             UPDATE title_ft_node_b
             SET primaryTitle = new_primaryTitle,
                 runtimeMinutes = new_runtimeMinutes,
@@ -237,6 +345,14 @@ BEGIN
                 startYear = new_startYear,
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
+            
+            CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
+                'UPDATE');
+            CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
         END IF;
     END IF;
 
@@ -266,6 +382,12 @@ CREATE PROCEDURE distributed_delete(
 
 BEGIN
     DECLARE current_transaction_id VARCHAR(36);
+    DECLARE old_startYear SMALLINT UNSIGNED;
+    DECLARE old_primaryTitle VARCHAR(1024);
+    DECLARE old_runtimeMinutes SMALLINT UNSIGNED;
+    DECLARE old_averageRating DECIMAL(3,1);
+    DECLARE old_numVotes INT UNSIGNED;
+    DECLARE old_weightedRating DECIMAL(10,2);
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -292,15 +414,42 @@ BEGIN
 
     START TRANSACTION;
 
+    -- Get old values before deleting
+    SELECT startYear, primaryTitle, runtimeMinutes, averageRating, numVotes, weightedRating
+    INTO old_startYear, old_primaryTitle, old_runtimeMinutes, old_averageRating, old_numVotes, old_weightedRating
+    FROM `stadvdb-mco2`.title_ft
+    WHERE tconst = new_tconst;
+
     DELETE FROM `stadvdb-mco2`.title_ft
     WHERE tconst = new_tconst;
 
     -- Set flag to prevent triggers on federated nodes from logging
     SET @federated_operation = 1;
 
-    -- Use federated tables to delete from remote nodes
-    DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
-    DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+    -- Use federated tables to delete from remote nodes and log to them
+    IF old_startYear IS NOT NULL AND old_startYear >= 2025 THEN
+        -- Delete from Node A
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        
+        DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
+        
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', old_primaryTitle, 'runtimeMinutes', old_runtimeMinutes,
+                       'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
+            NULL, 'DELETE');
+        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+    ELSE
+        -- Delete from Node B
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
+        
+        DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+        
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', old_primaryTitle, 'runtimeMinutes', old_runtimeMinutes,
+                       'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
+            NULL, 'DELETE');
+        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+    END IF;
 
     -- Clear federated flag
     SET @federated_operation = NULL;
