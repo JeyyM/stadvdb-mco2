@@ -69,14 +69,15 @@ BEGIN
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
        new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
 
+    -- Use federated tables to insert into remote nodes
     IF new_startYear IS NULL OR new_startYear < 2010 THEN
-        INSERT IGNORE INTO `stadvdb-mco2-b`.title_ft
+        INSERT INTO title_ft_node_b
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
+                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
     ELSE
-        INSERT IGNORE INTO `stadvdb-mco2-a`.title_ft
+        INSERT INTO title_ft_node_a
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
+                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
     END IF;
 
     COMMIT;
@@ -148,23 +149,23 @@ BEGIN
         weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
 
-    -- Check if you need to move to a new node
+    -- Check if you need to move to a new node (use federated tables)
     IF (old_startYear IS NULL OR old_startYear < 2010) AND (new_startYear >= 2010) THEN
         -- Moving from B to A
-        DELETE FROM `stadvdb-mco2-b`.title_ft WHERE tconst = new_tconst;
-        INSERT INTO `stadvdb-mco2-a`.title_ft
+        DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+        INSERT INTO title_ft_node_a
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
+                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
     ELSEIF (old_startYear >= 2010) AND (new_startYear IS NULL OR new_startYear < 2010) THEN
         -- Moving from A to B
-        DELETE FROM `stadvdb-mco2-a`.title_ft WHERE tconst = new_tconst;
-        INSERT INTO `stadvdb-mco2-b`.title_ft
+        DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
+        INSERT INTO title_ft_node_b
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
+                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
     ELSE
         -- Staying in the same node
         IF new_startYear IS NULL OR new_startYear < 2010 THEN
-            UPDATE `stadvdb-mco2-b`.title_ft
+            UPDATE title_ft_node_b
             SET primaryTitle = new_primaryTitle,
                 runtimeMinutes = new_runtimeMinutes,
                 averageRating = new_averageRating,
@@ -173,7 +174,7 @@ BEGIN
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
         ELSE
-            UPDATE `stadvdb-mco2-a`.title_ft
+            UPDATE title_ft_node_a
             SET primaryTitle = new_primaryTitle,
                 runtimeMinutes = new_runtimeMinutes,
                 averageRating = new_averageRating,
@@ -207,8 +208,9 @@ BEGIN
     DELETE FROM `stadvdb-mco2`.title_ft
     WHERE tconst = new_tconst;
 
-    DELETE FROM `stadvdb-mco2-a`.title_ft WHERE tconst = new_tconst;
-    DELETE FROM `stadvdb-mco2-b`.title_ft WHERE tconst = new_tconst;
+    -- Use federated tables to delete from remote nodes
+    DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
+    DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
 
     COMMIT;
 END$$
@@ -302,14 +304,15 @@ BEGIN
         weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
 
+    -- Use federated tables to update remote nodes
     IF current_startYear IS NULL OR current_startYear < 2010 THEN
-        UPDATE `stadvdb-mco2-b`.title_ft
+        UPDATE title_ft_node_b
         SET numVotes = updated_numVotes,
             averageRating = updated_averageRating,
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
     ELSE
-        UPDATE `stadvdb-mco2-a`.title_ft
+        UPDATE title_ft_node_a
         SET numVotes = updated_numVotes,
             averageRating = updated_averageRating,
             weightedRating = updated_weightedRating
