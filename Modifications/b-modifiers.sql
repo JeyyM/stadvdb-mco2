@@ -1,5 +1,23 @@
 USE `stadvdb-mco2-b`;
 
+-- Create transaction_logs table for recovery management
+DROP TABLE IF EXISTS transaction_logs;
+
+CREATE TABLE IF NOT EXISTS transaction_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    transaction_uuid VARCHAR(36) NOT NULL UNIQUE,
+    query_type ENUM('INSERT', 'UPDATE', 'DELETE') NOT NULL,
+    target_node VARCHAR(20) NOT NULL,
+    query_sql TEXT NOT NULL,
+    query_params JSON NOT NULL,
+    status ENUM('PENDING', 'COMMITTED', 'FAILED') NOT NULL DEFAULT 'PENDING',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_target_status (target_node, status),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 DROP PROCEDURE IF EXISTS distributed_insert;
 DROP PROCEDURE IF EXISTS distributed_update;
 DROP PROCEDURE IF EXISTS distributed_delete;
