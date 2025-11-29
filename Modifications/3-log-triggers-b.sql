@@ -24,8 +24,11 @@ CREATE TRIGGER title_ft_before_insert
 BEFORE INSERT ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log if this is a direct operation (not from Main's federated call)
-    IF @current_transaction_id IS NULL OR @federated_operation IS NULL THEN
+    -- Check if this is a federated operation from Main
+    IF @federated_operation = 1 THEN
+        -- This is from Main's federated call, reuse transaction_id but don't log BEGIN
+        SET @is_local_transaction = 0;
+    ELSE
         -- This is a direct local operation, create new transaction
         SET @current_transaction_id = UUID();
         SET @current_log_sequence = 0;
@@ -43,8 +46,9 @@ CREATE TRIGGER title_ft_after_insert
 AFTER INSERT ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log details if this is a local transaction
+    -- Always log the modification (whether local or federated)
     IF @is_local_transaction = 1 THEN
+        -- Local transaction: increment sequence normally
         SET @current_log_sequence = @current_log_sequence + 1;
         
         INSERT INTO transaction_log 
@@ -64,6 +68,25 @@ BEGIN
              'startYear', NEW.startYear
          ),
          'INSERT', 'NODE_B', NOW(6));
+    ELSE
+        -- Federated operation: log as replicated change from Main
+        INSERT INTO transaction_log 
+        (transaction_id, log_sequence, log_type, table_name, record_id, 
+         column_name, old_value, new_value, operation_type, source_node, timestamp)
+        VALUES 
+        (@current_transaction_id, 1, 'MODIFY', 'title_ft', NEW.tconst,
+         'ALL_COLUMNS', 
+         NULL,
+         JSON_OBJECT(
+             'tconst', NEW.tconst,
+             'primaryTitle', NEW.primaryTitle,
+             'runtimeMinutes', NEW.runtimeMinutes,
+             'averageRating', NEW.averageRating,
+             'numVotes', NEW.numVotes,
+             'weightedRating', NEW.weightedRating,
+             'startYear', NEW.startYear
+         ),
+         'INSERT', 'MAIN', NOW(6)); -- Source is MAIN to indicate it was replicated
     END IF;
 END$$
 
@@ -75,8 +98,11 @@ CREATE TRIGGER title_ft_before_update
 BEFORE UPDATE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log if this is a direct operation (not from Main's federated call)
-    IF @current_transaction_id IS NULL OR @federated_operation IS NULL THEN
+    -- Check if this is a federated operation from Main
+    IF @federated_operation = 1 THEN
+        -- This is from Main's federated call, reuse transaction_id but don't log BEGIN
+        SET @is_local_transaction = 0;
+    ELSE
         -- This is a direct local operation
         SET @current_transaction_id = UUID();
         SET @current_log_sequence = 0;
@@ -94,8 +120,9 @@ CREATE TRIGGER title_ft_after_update
 AFTER UPDATE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log details if this is a local transaction
+    -- Always log the modification (whether local or federated)
     IF @is_local_transaction = 1 THEN
+        -- Local transaction: increment sequence normally
         SET @current_log_sequence = @current_log_sequence + 1;
         
         INSERT INTO transaction_log 
@@ -123,6 +150,33 @@ BEGIN
              'startYear', NEW.startYear
          ),
          'UPDATE', 'NODE_B', NOW(6));
+    ELSE
+        -- Federated operation: log as replicated change from Main
+        INSERT INTO transaction_log 
+        (transaction_id, log_sequence, log_type, table_name, record_id, 
+         column_name, old_value, new_value, operation_type, source_node, timestamp)
+        VALUES 
+        (@current_transaction_id, 1, 'MODIFY', 'title_ft', NEW.tconst,
+         'ALL_COLUMNS',
+         JSON_OBJECT(
+             'tconst', OLD.tconst,
+             'primaryTitle', OLD.primaryTitle,
+             'runtimeMinutes', OLD.runtimeMinutes,
+             'averageRating', OLD.averageRating,
+             'numVotes', OLD.numVotes,
+             'weightedRating', OLD.weightedRating,
+             'startYear', OLD.startYear
+         ),
+         JSON_OBJECT(
+             'tconst', NEW.tconst,
+             'primaryTitle', NEW.primaryTitle,
+             'runtimeMinutes', NEW.runtimeMinutes,
+             'averageRating', NEW.averageRating,
+             'numVotes', NEW.numVotes,
+             'weightedRating', NEW.weightedRating,
+             'startYear', NEW.startYear
+         ),
+         'UPDATE', 'MAIN', NOW(6)); -- Source is MAIN to indicate it was replicated
     END IF;
 END$$
 
@@ -134,8 +188,11 @@ CREATE TRIGGER title_ft_before_delete
 BEFORE DELETE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log if this is a direct operation (not from Main's federated call)
-    IF @current_transaction_id IS NULL OR @federated_operation IS NULL THEN
+    -- Check if this is a federated operation from Main
+    IF @federated_operation = 1 THEN
+        -- This is from Main's federated call, reuse transaction_id but don't log BEGIN
+        SET @is_local_transaction = 0;
+    ELSE
         -- This is a direct local operation
         SET @current_transaction_id = UUID();
         SET @current_log_sequence = 0;
@@ -153,8 +210,9 @@ CREATE TRIGGER title_ft_after_delete
 AFTER DELETE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log details if this is a local transaction
+    -- Always log the modification (whether local or federated)
     IF @is_local_transaction = 1 THEN
+        -- Local transaction: increment sequence normally
         SET @current_log_sequence = @current_log_sequence + 1;
         
         INSERT INTO transaction_log 
@@ -174,6 +232,25 @@ BEGIN
          ),
          NULL,
          'DELETE', 'NODE_B', NOW(6));
+    ELSE
+        -- Federated operation: log as replicated change from Main
+        INSERT INTO transaction_log 
+        (transaction_id, log_sequence, log_type, table_name, record_id, 
+         column_name, old_value, new_value, operation_type, source_node, timestamp)
+        VALUES 
+        (@current_transaction_id, 1, 'MODIFY', 'title_ft', OLD.tconst,
+         'ALL_COLUMNS',
+         JSON_OBJECT(
+             'tconst', OLD.tconst,
+             'primaryTitle', OLD.primaryTitle,
+             'runtimeMinutes', OLD.runtimeMinutes,
+             'averageRating', OLD.averageRating,
+             'numVotes', OLD.numVotes,
+             'weightedRating', OLD.weightedRating,
+             'startYear', OLD.startYear
+         ),
+         NULL,
+         'DELETE', 'MAIN', NOW(6)); -- Source is MAIN to indicate it was replicated
     END IF;
 END$$
 
