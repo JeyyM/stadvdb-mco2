@@ -10,8 +10,6 @@ DROP PROCEDURE IF EXISTS distributed_aggregation;
 
 DELIMITER $$
 
-DELIMITER $$
-
 CREATE PROCEDURE distributed_insert(
     IN new_tconst VARCHAR(12),
     IN new_primaryTitle VARCHAR(1024),
