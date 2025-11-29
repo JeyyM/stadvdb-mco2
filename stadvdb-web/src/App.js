@@ -3,7 +3,7 @@ import './App.css';
 
 function App() {
   const [showEditPopup, setShowEditPopup] = useState(false);
-  // Track if popup is open for disabling buttons
+  // Track if popup is open for disabling buttons 
   const popupActive = showEditPopup;
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -728,6 +728,7 @@ function App() {
                     {Object.keys(selectResults[0]).map((col, idx) => (
                       <th key={idx}>{col}</th>
                     ))}
+                    <th>Edit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -736,6 +737,15 @@ function App() {
                       {Object.values(row).map((val, j) => (
                         <td key={j}>{String(val)}</td>
                       ))}
+                      <td>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => handleEditClick(row)}
+                          disabled={popupActive}
+                        >
+                          Edit
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

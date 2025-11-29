@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
 const db = require('./db');
-const RecoveryManager = require('./recoveryManager');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -27,70 +26,23 @@ app.use(express.json());
 // ============================================================================
 // API ROUTES
 
-// 1. RECOVERY & LOGGING ENDPOINTS (Yazan sectio)
-// Trigger the recovery process manually
-// Usage: POST /api/recovery/sync with body { "node": "NODE_A" }
-app.post('/api/recovery/sync', async (req, res) => {
-  try {
-    const { node } = req.body;
-    if (!node) return res.status(400).json({ success: false, message: 'Node required' });
-    console.log(`Manual recovery triggered for ${node}`);
-    await RecoveryManager.recoverFailedTransactions(node);
-    res.json({ success: true, message: `Recovery process finished for ${node}` });
-  } catch (error) {
-    console.error('Recovery failed:', error);
-    res.status(500).json({ success: false, message: 'Recovery failed', error: error.message });
-  }
-});
-
-// 2. DISTRIBUTED TRANSACTIONS (Modified with Recovery Logic)
+// DISTRIBUTED TRANSACTIONS
 // Distributed insert system
 app.post('/api/titles/distributed-insert', async (req, res) => {
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
-    if (!tconst || !primaryTitle) return res.status(400).json({ success: false, message: 'Required fields missing' });
-
+    
     // Validate required fields
     if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
       return res.status(400).json({ success: false, message: 'All fields are required' });
     }
 
-    // --- RECOVERY LOGIC START ---
-    // Determine which node this SHOULD go to based on fragmentation rules
-    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
-    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
-    const transactionId = await RecoveryManager.logTransaction('INSERT', target, sql, params);
-
-    try {
-        await db.query(sql, params);
-        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-        res.json({ success: true, message: 'Inserted via Federation' });
-
-    } catch (fedError) {
-        console.error(`[Federation Failed] Switching to Local Fallback: ${fedError.message}`);
-        
-        if (!isMainNode) {
-            try {
-                const fallbackSql = `
-                    INSERT IGNORE INTO title_ft 
-                    (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, weightedRating) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                `;
-                await db.query(fallbackSql, [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, averageRating]);
-                
-                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', fedError.message);
-                
-                res.json({ success: true, message: 'Main Node down. Saved Locally.', warning: 'Offline Mode' });
-            } catch (localError) {
-                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', localError.message);
-                throw localError;
-            }
-        } else {
-            throw fedError;
-        }
-    }
+    
+    await db.query(sql, params);
+    res.json({ success: true, message: 'Inserted successfully' });
+    
   } catch (error) {
     console.error('Insert Error:', error);
     res.status(500).json({ success: false, message: 'Insert Error', error: error.message });
@@ -101,46 +53,17 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 app.post('/api/titles/distributed-update', async (req, res) => {
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
-    if (!tconst) return res.status(400).json({ success: false, message: 'tconst required' });
-
+    
     if (!tconst) {
       return res.status(400).json({ success: false, message: 'tconst is required' });
     }
 
-    // --- RECOVERY LOGIC START ---
-    // For updates, the target node might change if startYear changes
-    // but primarily we track where the data *ends up*
-    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
-    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
-    const transactionId = await RecoveryManager.logTransaction('UPDATE', isMainNode ? 'NODES' : 'MAIN', sql, params);
-
-    try {
-        await db.query(sql, params);
-        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-        res.json({ success: true, message: 'Updated via Federation' });
-    } catch (fedError) {
-        console.error(`[Federation Failed] Switching to Local Fallback: ${fedError.message}`);
-        if (!isMainNode) {
-            try {
-                const fallbackSql = `
-                    UPDATE title_ft SET 
-                    primaryTitle=?, runtimeMinutes=?, averageRating=?, numVotes=?, startYear=?
-                    WHERE tconst=?
-                `;
-                await db.query(fallbackSql, [primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, tconst]);
-                
-                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', fedError.message);
-                res.json({ success: true, message: 'Main Node down. Updated Locally.', warning: 'Offline Mode' });
-            } catch (localError) {
-                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', localError.message);
-                throw localError;
-            }
-        } else {
-            throw fedError;
-        }
-    }
+    
+    await db.query(sql, params);
+    res.json({ success: true, message: 'Updated successfully' });
+    
   } catch (error) {
     console.error('Update Error:', error);
     res.status(500).json({ success: false, message: 'Update Error', error: error.message });
@@ -151,43 +74,24 @@ app.post('/api/titles/distributed-update', async (req, res) => {
 app.post('/api/titles/distributed-delete', async (req, res) => {
   try {
     const { tconst } = req.body;
-    if (!tconst) return res.status(400).json({ success: false, message: 'tconst required' });
-
-    const currentNode = process.env.DB_NAME; 
-    const isMainNode = currentNode === 'stadvdb-mco2';
+    
+    if (!tconst) {
+      return res.status(400).json({ success: false, message: 'tconst required' });
+    }
 
     const sql = 'CALL distributed_delete(?)';
     const params = [tconst];
-    const transactionId = await RecoveryManager.logTransaction('DELETE', isMainNode ? 'NODES' : 'MAIN', sql, params);
-
-    try {
-        await db.query(sql, params);
-        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-        res.json({ success: true, message: 'Deleted via Federation' });
-    } catch (fedError) {
-        console.error(`[Federation Failed] Switching to Local Fallback: ${fedError.message}`);
-        if (!isMainNode) {
-            try {
-                const fallbackSql = 'DELETE FROM title_ft WHERE tconst = ?';
-                await db.query(fallbackSql, params);
-                
-                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', fedError.message);
-                res.json({ success: true, message: 'Main Node down. Deleted Locally.', warning: 'Offline Mode' });
-            } catch (localError) {
-                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', localError.message);
-                throw localError;
-            }
-        } else {
-            throw fedError;
-        }
-    }
+    
+    await db.query(sql, params);
+    res.json({ success: true, message: 'Deleted successfully' });
+    
   } catch (error) {
     console.error('Delete Error:', error);
     res.status(500).json({ success: false, message: 'Delete Error', error: error.message });
   }
 });
 
-// 3. READ-ONLY ROUTES (No Logging Needed)
+// READ-ONLY ROUTES
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
     try {

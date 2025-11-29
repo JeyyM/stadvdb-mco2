@@ -1,22 +1,4 @@
-USE `stadvdb-mco2-a`;
-
--- Create transaction_logs table for recovery management
-DROP TABLE IF EXISTS transaction_logs;
-
-CREATE TABLE IF NOT EXISTS transaction_logs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    transaction_uuid VARCHAR(36) NOT NULL UNIQUE,
-    query_type ENUM('INSERT', 'UPDATE', 'DELETE') NOT NULL,
-    target_node VARCHAR(20) NOT NULL,
-    query_sql TEXT NOT NULL,
-    query_params JSON NOT NULL,
-    status ENUM('PENDING', 'COMMITTED', 'FAILED') NOT NULL DEFAULT 'PENDING',
-    error_message TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_target_status (target_node, status),
-    INDEX idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+USE `stadvdb-mco2-b`;
 
 DROP PROCEDURE IF EXISTS distributed_insert;
 DROP PROCEDURE IF EXISTS distributed_update;
@@ -37,9 +19,37 @@ CREATE PROCEDURE distributed_insert(
     IN new_startYear SMALLINT UNSIGNED
 )
 BEGIN
+    DECLARE current_transaction_id VARCHAR(36);
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
+    
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Log ABORT
+        INSERT INTO transaction_log (
+            transaction_id, log_sequence, log_type, 
+            timestamp, table_name, operation_type, source_node
+        ) VALUES (
+            current_transaction_id, 
+            IFNULL(@current_log_sequence, 0) + 1,
+            'ABORT',
+            NOW(6),
+            'title_ft',
+            'INSERT',
+            'node_b'
+        );
+        
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    
+    -- Initialize transaction
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
 
     -- Calculate global mean from Main
     SELECT AVG(averageRating) INTO global_mean
@@ -79,12 +89,30 @@ BEGIN
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
        new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
 
-    -- Insert into local node if this record belongs here (>= 2025)
-    IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
+    -- Insert into local node if this record belongs here (< 2025, including NULL)
+    IF new_startYear IS NULL OR new_startYear < 2025 THEN
         INSERT INTO title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
     END IF;
+    
+    -- Log COMMIT
+    INSERT INTO transaction_log (
+        transaction_id, log_sequence, log_type, 
+        timestamp, table_name, operation_type, source_node
+    ) VALUES (
+        current_transaction_id, 
+        IFNULL(@current_log_sequence, 0) + 1,
+        'COMMIT',
+        NOW(6),
+        'title_ft',
+        'INSERT',
+        'node_b'
+    );
+    
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
+    COMMIT;
 END$$
 
 CREATE PROCEDURE distributed_update(
@@ -96,10 +124,38 @@ CREATE PROCEDURE distributed_update(
     IN new_startYear SMALLINT UNSIGNED
 )
 BEGIN
+    DECLARE current_transaction_id VARCHAR(36);
     DECLARE old_startYear SMALLINT UNSIGNED;
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE updated_weightedRating DECIMAL(4,2);
+    
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Log ABORT
+        INSERT INTO transaction_log (
+            transaction_id, log_sequence, log_type, 
+            timestamp, table_name, operation_type, source_node
+        ) VALUES (
+            current_transaction_id, 
+            IFNULL(@current_log_sequence, 0) + 1,
+            'ABORT',
+            NOW(6),
+            'title_ft',
+            'UPDATE',
+            'node_b'
+        );
+        
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    
+    -- Initialize transaction
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
 
     -- Get initial startYear from Main
     SELECT startYear INTO old_startYear
@@ -142,16 +198,16 @@ BEGIN
     WHERE tconst = new_tconst;
 
     -- Handle local node updates based on startYear changes
-    IF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
-        -- Moving to Node A - insert locally
+    IF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
+        -- Moving to Node B - insert locally
         INSERT INTO title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-    ELSEIF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
-        -- Moving from Node A - delete locally
+    ELSEIF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
+        -- Moving from Node B to Node A - delete locally
         DELETE FROM title_ft WHERE tconst = new_tconst;
-    ELSEIF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
-        -- Staying in Node A - update locally
+    ELSEIF new_startYear IS NULL OR new_startYear < 2025 THEN
+        -- Staying in Node B - update locally
         UPDATE title_ft
         SET primaryTitle = new_primaryTitle,
             runtimeMinutes = new_runtimeMinutes,
@@ -161,17 +217,82 @@ BEGIN
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
     END IF;
+    
+    -- Log COMMIT
+    INSERT INTO transaction_log (
+        transaction_id, log_sequence, log_type, 
+        timestamp, table_name, operation_type, source_node
+    ) VALUES (
+        current_transaction_id, 
+        IFNULL(@current_log_sequence, 0) + 1,
+        'COMMIT',
+        NOW(6),
+        'title_ft',
+        'UPDATE',
+        'node_b'
+    );
+    
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
+    COMMIT;
 END$$
 
 CREATE PROCEDURE distributed_delete(
-    IN target_tconst VARCHAR(12)
+    IN new_tconst VARCHAR(12)
 )
 BEGIN
+    DECLARE current_transaction_id VARCHAR(36);
+    
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Log ABORT
+        INSERT INTO transaction_log (
+            transaction_id, log_sequence, log_type, 
+            timestamp, table_name, operation_type, source_node
+        ) VALUES (
+            current_transaction_id, 
+            IFNULL(@current_log_sequence, 0) + 1,
+            'ABORT',
+            NOW(6),
+            'title_ft',
+            'DELETE',
+            'node_b'
+        );
+        
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        ROLLBACK;
+        RESIGNAL;
+    END;
+    
+    -- Initialize transaction
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
+    
     -- Delete from Main via federated table
     DELETE FROM title_ft_main WHERE tconst = new_tconst;
     
     -- Delete from local node if exists
     DELETE FROM title_ft WHERE tconst = new_tconst;
+    
+    -- Log COMMIT
+    INSERT INTO transaction_log (
+        transaction_id, log_sequence, log_type, 
+        timestamp, table_name, operation_type, source_node
+    ) VALUES (
+        current_transaction_id, 
+        IFNULL(@current_log_sequence, 0) + 1,
+        'COMMIT',
+        NOW(6),
+        'title_ft',
+        'DELETE',
+        'node_b'
+    );
+    
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
+    COMMIT;
 END$$
 
 
