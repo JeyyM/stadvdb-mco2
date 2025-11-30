@@ -64,7 +64,7 @@ function isConnectionError(error) {
 }
 
 /**
- * Check if *local* database connection is healthy
+ * Check if *local* database connection is healthy/
  */
 async function checkDatabaseHealth() {
   // Throttle if we're calling this too frequently
