@@ -215,6 +215,19 @@ app.get('/api/titles/distributed-search', async (req, res) => {
 
 // Aggregation Route
 app.get('/api/aggregation', async (req, res) => {
+  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+  const proxyTarget = await failoverProxy.getProxyTarget();
+  if (proxyTarget) {
+    console.log(`🔄 Proactively proxying /api/aggregation to ${proxyTarget.name}`);
+    return failoverProxy.forwardToMain(req, res, () => {
+      // Fallback if proxy fails
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching aggregations - all nodes unavailable'
+      });
+    });
+  }
+  
   try {
     // Try to call distributed_aggregation if it exists (Main node)
     const [results] = await db.query('CALL distributed_aggregation()', []);

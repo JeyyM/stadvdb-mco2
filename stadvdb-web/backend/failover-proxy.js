@@ -85,28 +85,35 @@ async function checkRemoteNodeHealth() {
  * Determine which node to proxy to based on failover hierarchy
  * Hierarchy: Main → Node A → Node B (local fallback)
  */
-function getProxyTarget() {
+async function getProxyTarget() {
+  // For Main node, check DB health immediately to detect failures
+  if (CURRENT_NODE === 'MAIN') {
+    const dbHealthy = await checkDatabaseHealth();
+    if (!dbHealthy && nodeAHealthy) {
+      return { url: NODE_A_API_URL, name: 'Node A (backup coordinator)' };
+    }
+    return null; // Either Main's DB is healthy (use local), or no backup available
+  }
+  
+  // Node B: Try Main first, then Node A
   if (CURRENT_NODE === 'NODE_B') {
-    // Node B: Try Main first, then Node A
     if (mainNodeHealthy) {
       return { url: MAIN_API_URL, name: 'Main' };
     } else if (nodeAHealthy) {
       return { url: NODE_A_API_URL, name: 'Node A' };
     }
     return null; // No proxy available, use local data
-  } else if (CURRENT_NODE === 'NODE_A') {
-    // Node A: Try Main only (A is second in hierarchy)
+  } 
+  
+  // Node A: Try Main only (A is second in hierarchy)
+  if (CURRENT_NODE === 'NODE_A') {
     if (mainNodeHealthy) {
       return { url: MAIN_API_URL, name: 'Main' };
     }
     return null; // No proxy available, Node A will handle distributed operations
-  } else {
-    // Main node: If own database is down, try Node A as backup coordinator
-    if (!isDatabaseHealthy && nodeAHealthy) {
-      return { url: NODE_A_API_URL, name: 'Node A (backup coordinator)' };
-    }
-    return null; // Either Main's DB is healthy (use local), or no backup available
   }
+  
+  return null;
 }
 
 /**
@@ -312,6 +319,7 @@ module.exports = {
   handleDatabaseError,
   checkDatabaseHealth,
   queryWithFailover,
+  getProxyTarget,
   isDatabaseHealthy: () => isDatabaseHealthy,
   isMainHealthy: () => mainNodeHealthy,
   isNodeAHealthy: () => nodeAHealthy,
