@@ -58,7 +58,7 @@ async function checkRemoteNodeHealth() {
   }
   lastRemoteHealthCheck = now;
 
-  // Check Main node health
+  // Check Main node health (if we're not Main)
   if (CURRENT_NODE !== 'MAIN') {
     try {
       await axios.get(`${MAIN_API_URL}/api/recovery/status`, { timeout: 5000 });
@@ -69,8 +69,8 @@ async function checkRemoteNodeHealth() {
     }
   }
 
-  // Check Node A health (if we're Node B)
-  if (CURRENT_NODE === 'NODE_B') {
+  // Check Node A health (if we're Main or Node B - both might need to proxy to Node A)
+  if (CURRENT_NODE === 'MAIN' || CURRENT_NODE === 'NODE_B') {
     try {
       await axios.get(`${NODE_A_API_URL}/api/recovery/status`, { timeout: 5000 });
       nodeAHealthy = true;
