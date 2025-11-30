@@ -12,6 +12,7 @@ DROP PROCEDURE IF EXISTS log_to_remote_node;
 DELIMITER $$
 
 -- Helper procedure to log to remote node's transaction_log
+-- This procedure has built-in error handling to gracefully handle node failures
 CREATE PROCEDURE log_to_remote_node(
     IN target_node VARCHAR(10),  -- 'NODE_A' or 'NODE_B'
     IN txn_id VARCHAR(36),
@@ -25,6 +26,13 @@ CREATE PROCEDURE log_to_remote_node(
     IN op_type VARCHAR(10)  -- 'INSERT', 'UPDATE', 'DELETE'
 )
 BEGIN
+    -- Handler for any errors when logging to federated tables
+    -- If remote node is down, just continue silently - recovery will handle it later
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Silent failure - recovery system will replay these logs when node comes back
+    END;
+    
     IF target_node = 'NODE_A' THEN
         INSERT INTO transaction_log_node_a
         (transaction_id, log_sequence, log_type, table_name, record_id, 
@@ -55,11 +63,16 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
     DECLARE current_transaction_id VARCHAR(36);
+    DECLARE federated_error INT DEFAULT 0;
     
-    -- Handler for federated table errors (just continue, don't crash)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
     BEGIN
-        -- Federated table connection failed - continue without replication
+        SET federated_error = 1;
+        -- Main operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -194,14 +207,16 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE updated_weightedRating DECIMAL(4,2);
     DECLARE current_transaction_id VARCHAR(36);
+    DECLARE federated_error INT DEFAULT 0;
     
-    -- Handler for federated table errors (just continue, don't crash)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
     BEGIN
-        -- Error 1429: Unable to connect to foreign data source
-        -- Error 1158: Got an error reading communication packets
-        -- Error 1189: Net read timeout
-        -- Just continue - federated replication will fail silently
+        SET federated_error = 1;
+        -- Main operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -403,11 +418,16 @@ BEGIN
     DECLARE old_averageRating DECIMAL(3,1);
     DECLARE old_numVotes INT UNSIGNED;
     DECLARE old_weightedRating DECIMAL(10,2);
+    DECLARE federated_error INT DEFAULT 0;
     
-    -- Handler for federated table errors (just continue, don't crash)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
     BEGIN
-        -- Federated table connection failed - continue without replication
+        SET federated_error = 1;
+        -- Main operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -510,11 +530,16 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE current_transaction_id VARCHAR(36);
+    DECLARE federated_error INT DEFAULT 0;
     
-    -- Handler for federated table errors (same pattern as distributed_insert, distributed_update, distributed_delete)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
     BEGIN
-        -- Errors ignored: operation succeeded on MAIN, remote replication will be handled by recovery procedures
+        SET federated_error = 1;
+        -- Main operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
