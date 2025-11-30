@@ -1,38 +1,6 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 
-// Failover fetch - tries primary backend, falls back to Main if it fails
-const MAIN_BACKEND_URL = 'https://stadvdb-mco2-main.onrender.com';
-
-async function fetchWithFailover(url, options = {}) {
-  const primaryUrl = url.startsWith('http') ? url : `${process.env.REACT_APP_API_URL}${url}`;
-  
-  try {
-    const response = await fetch(primaryUrl, options);
-    if (response.ok) return response;
-    throw new Error(`HTTP ${response.status}`);
-  } catch (primaryError) {
-    console.warn(`Primary backend failed (${primaryUrl}), trying Main...`, primaryError.message);
-    
-    // Build fallback URL to Main backend
-    const fallbackUrl = url.startsWith('http') 
-      ? url.replace(process.env.REACT_APP_API_URL, MAIN_BACKEND_URL)
-      : `${MAIN_BACKEND_URL}${url}`;
-    
-    try {
-      const response = await fetch(fallbackUrl, options);
-      if (response.ok) {
-        console.log('✓ Failover to Main backend successful');
-        return response;
-      }
-      throw new Error(`HTTP ${response.status}`);
-    } catch (fallbackError) {
-      console.error('Both primary and Main backend failed');
-      throw new Error(`All backends failed. Primary: ${primaryError.message}, Main: ${fallbackError.message}`);
-    }
-  }
-}
-
 function App() {
   const [showEditPopup, setShowEditPopup] = useState(false);
   // Track if popup is open for disabling buttons 
@@ -79,7 +47,7 @@ function App() {
     setDeleteLoading(true);
     setEditError(null);
     try {
-  const res = await fetchWithFailover(`/api/titles/distributed-delete`, {
+  const res = await fetch(`/api/titles/distributed-delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tconst: editForm.tconst }),
@@ -141,7 +109,7 @@ function App() {
     setReviewSuccess(null);
     
     try {
-      const res = await fetchWithFailover('/api/titles/add-reviews', {
+      const res = await fetch('/api/titles/add-reviews', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -234,7 +202,7 @@ function App() {
           weightedRating: editForm.weightedRating,
         });
       }
-      const res = await fetchWithFailover(url, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -292,7 +260,7 @@ function App() {
   const fetchAggregations = () => {
     setLoadingAggregations(true);
     setAggError(null);
-  fetchWithFailover(`/api/aggregation`)
+  fetch(`/api/aggregation`)
       .then((response) => response.json())
       .then((data) => {
         setAggregations(data.data);
@@ -324,7 +292,7 @@ function App() {
     setHasSearched(true);
 
     try {
-      const res = await fetchWithFailover(
+      const res = await fetch(
         `/api/titles/distributed-search?search_term=${encodeURIComponent(
           searchTerm
         )}&limit_count=${limit}`
@@ -380,7 +348,7 @@ function App() {
     setHasSelected(true);
 
     try {
-      const res = await fetchWithFailover(
+      const res = await fetch(
         `/api/titles/distributed-select?select_column=${encodeURIComponent(
           selectColumn
         )}&order_direction=${orderDirection}&limit_count=${selectLimit}`
