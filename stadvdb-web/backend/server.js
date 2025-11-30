@@ -92,6 +92,37 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
   }
 });
 
+// Add reviews system
+app.post('/api/titles/add-reviews', async (req, res) => {
+  try {
+    const { tconst, newRating, newVotes } = req.body;
+    
+    if (!tconst || newRating === undefined || newVotes === undefined) {
+      return res.status(400).json({ success: false, message: 'tconst, newRating, and newVotes required' });
+    }
+
+    // Validate rating range
+    if (newRating < 0 || newRating > 10) {
+      return res.status(400).json({ success: false, message: 'Rating must be between 0 and 10' });
+    }
+
+    // Validate votes is positive
+    if (newVotes <= 0) {
+      return res.status(400).json({ success: false, message: 'Number of votes must be positive' });
+    }
+
+    const sql = 'CALL distributed_addReviews(?, ?, ?)';
+    const params = [tconst, newVotes, newRating]; // Order: tconst, num_new_reviews, new_rating
+    
+    await db.query(sql, params, { isWrite: true }); // Mark as write operation
+    res.json({ success: true, message: 'Reviews added successfully' });
+    
+  } catch (error) {
+    console.error('Add Reviews Error:', error);
+    res.status(500).json({ success: false, message: 'Add Reviews Error', error: error.message });
+  }
+});
+
 // READ-ONLY ROUTES
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
