@@ -575,6 +575,9 @@ BEGIN
     WHERE tconst = new_tconst;
 
     -- Use federated tables to update remote nodes
+    -- Set flag to prevent cascade logging on remote nodes
+    SET @federated_operation = 1;
+    
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
     IF current_startYear IS NOT NULL AND current_startYear >= 2025 THEN
         UPDATE title_ft_node_a
@@ -589,6 +592,9 @@ BEGIN
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
     END IF;
+    
+    -- Clear federated flag
+    SET @federated_operation = NULL;
 
     -- Log COMMIT before committing transaction
     SET @current_log_sequence = @current_log_sequence + 1;
