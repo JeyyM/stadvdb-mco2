@@ -1,8 +1,4 @@
--- ============================================================================
 -- DISABLE TRIGGERS ON NODE B
--- Since Main node logs to Node B's transaction_log via federated tables,
--- we don't need triggers on Node B anymore (they would create duplicates)
--- ============================================================================
 
 USE `stadvdb-mco2-b`;
 

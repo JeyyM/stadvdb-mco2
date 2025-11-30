@@ -70,7 +70,7 @@ function App() {
         }, 800);
       } else {
         const errorMsg = data.message || data.error || 'Delete failed';
-        console.error('❌ Delete Error:', {
+        console.error('Delete Error:', {
           operation: 'DELETE',
           tconst: editForm.tconst,
           error: errorMsg,
@@ -80,7 +80,7 @@ function App() {
         setEditError(`Delete Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Delete Exception:', {
+      console.error('Delete Exception:', {
         operation: 'DELETE',
         tconst: editForm.tconst,
         error: err.message,
@@ -152,7 +152,7 @@ function App() {
         }, 1000);
       } else {
         const errorMsg = data.message || data.error || 'Failed to add reviews';
-        console.error('❌ Add Reviews Error:', {
+        console.error('Add Reviews Error:', {
           operation: 'ADD_REVIEWS',
           tconst: editForm.tconst,
           newRating: rating,
@@ -164,7 +164,7 @@ function App() {
         setReviewError(`Add Reviews Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Add Reviews Exception:', {
+      console.error('Add Reviews Exception:', {
         operation: 'ADD_REVIEWS',
         tconst: editForm.tconst,
         newRating: rating,
@@ -257,7 +257,7 @@ function App() {
         }, 1000);
       } else {
         const errorMsg = data.message || data.error || (editRow ? 'Update failed' : 'Insert failed');
-        console.error('❌ Server Error:', {
+        console.error('Server Error:', {
           operation: editRow ? 'UPDATE' : 'INSERT',
           error: errorMsg,
           fullResponse: data,
@@ -266,13 +266,13 @@ function App() {
         setEditError(`Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Edit/Insert error:', {
+      console.error('Edit/Insert error:', {
         operation: editRow ? 'UPDATE' : 'INSERT',
         error: err.message,
         stack: err.stack,
         timestamp: new Date().toISOString()
       });
-      // Try to extract meaningful error message
+      // Try to get useful error message
       const errorMessage = err.message || (editRow ? 'Update failed' : 'Insert failed');
       setEditError(`Error: ${errorMessage}`);
     } finally {
@@ -311,7 +311,7 @@ function App() {
           setAggregations(data.data);
         } else {
           const errorMsg = data.message || data.error || 'Failed to load statistics';
-          console.error('❌ Aggregation Error:', {
+          console.error('Aggregation Error:', {
             operation: 'AGGREGATION',
             error: errorMsg,
             fullResponse: data,
@@ -322,7 +322,7 @@ function App() {
         setLoadingAggregations(false);
       })
       .catch((error) => {
-        console.error('❌ Aggregation Exception:', {
+        console.error('Aggregation Exception:', {
           operation: 'AGGREGATION',
           error: error.message,
           stack: error.stack,
@@ -374,7 +374,7 @@ function App() {
         setResults(data.data);
       } else {
         const errorMsg = data.message || 'Search failed';
-        console.error('❌ Search Error:', {
+        console.error('Search Error:', {
           operation: 'SEARCH',
           searchTerm,
           limit,
@@ -385,7 +385,7 @@ function App() {
         setError(`Search Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Search Exception:', {
+      console.error('Search Exception:', {
         operation: 'SEARCH',
         searchTerm,
         limit,
@@ -433,7 +433,7 @@ function App() {
         setSelectResults(data.data);
       } else {
         const errorMsg = data.message || 'Select failed';
-        console.error('❌ Select Error:', {
+        console.error('Select Error:', {
           operation: 'SELECT',
           selectColumn,
           orderDirection,
@@ -445,7 +445,7 @@ function App() {
         setSelectError(`Select Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Select Exception:', {
+      console.error('Select Exception:', {
         operation: 'SELECT',
         selectColumn,
         orderDirection,

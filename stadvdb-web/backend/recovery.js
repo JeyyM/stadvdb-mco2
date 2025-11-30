@@ -22,7 +22,7 @@ function isRecovering() {
  */
 async function waitForRecovery() {
   if (isRecoveryInProgress && recoveryPromise) {
-    console.log('⏳ Waiting for recovery to complete...');
+    console.log('Waiting for recovery to complete...');
     await recoveryPromise;
   }
 }
@@ -57,34 +57,34 @@ function isNodeB() {
  */
 async function recoverNodeA(sinceTimestamp = null) {
   if (!isMainNode()) {
-    console.log('⏭️ Skipping Node A recovery - not Main node');
+    console.log('Skipping Node A recovery - not Main node');
     return { skipped: true };
   }
 
   try {
     const since = sinceTimestamp || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
     
-    console.log(`🔍 Checking for missing transactions on Node A since ${since}...`);
+    console.log(`Checking for missing transactions on Node A since ${since}...`);
     
     // Find missing transactions
     const [missing] = await db.query('CALL find_missing_on_node_a(?)', [since]);
     
     if (!missing || !missing[0] || missing[0].length === 0) {
-      console.log('✅ Node A is synchronized - no missing transactions');
+      console.log('Node A is synchronized - no missing transactions');
       return { recovered: 0, skipped: false };
     }
     
-    console.log(`⚠️ Found ${missing[0].length} missing transactions on Node A`);
+    console.log(`Found ${missing[0].length} missing transactions on Node A`);
     
     // Run full recovery
-    console.log('🔄 Starting automatic recovery for Node A...');
+    console.log('Starting automatic recovery for Node A...');
     await db.query('CALL full_recovery_node_a(?)', [since]);
     
-    console.log(`✅ Node A recovery complete - ${missing[0].length} transactions replayed`);
+    console.log(`Node A recovery complete - ${missing[0].length} transactions replayed`);
     return { recovered: missing[0].length, skipped: false };
     
   } catch (error) {
-    console.error('❌ Error during Node A recovery:', error.message);
+    console.error('Error during Node A recovery:', error.message);
     return { error: error.message, skipped: false };
   }
 }
@@ -95,32 +95,32 @@ async function recoverNodeA(sinceTimestamp = null) {
  */
 async function recoverNodeB(sinceTimestamp = null) {
   if (!isMainNode()) {
-    console.log('⏭️ Skipping Node B recovery - not Main node');
+    console.log('Skipping Node B recovery - not Main node');
     return { skipped: true };
   }
 
   try {
     const since = sinceTimestamp || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
     
-    console.log(`🔍 Checking for missing transactions on Node B since ${since}...`);
+    console.log(`Checking for missing transactions on Node B since ${since}...`);
     
     const [missing] = await db.query('CALL find_missing_on_node_b(?)', [since]);
     
     if (!missing || !missing[0] || missing[0].length === 0) {
-      console.log('✅ Node B is synchronized - no missing transactions');
+      console.log('Node B is synchronized - no missing transactions');
       return { recovered: 0, skipped: false };
     }
     
-    console.log(`⚠️ Found ${missing[0].length} missing transactions on Node B`);
+    console.log(`Found ${missing[0].length} missing transactions on Node B`);
     
-    console.log('🔄 Starting automatic recovery for Node B...');
+    console.log('Starting automatic recovery for Node B...');
     await db.query('CALL full_recovery_node_b(?)', [since]);
     
-    console.log(`✅ Node B recovery complete - ${missing[0].length} transactions replayed`);
+    console.log(`Node B recovery complete - ${missing[0].length} transactions replayed`);
     return { recovered: missing[0].length, skipped: false };
     
   } catch (error) {
-    console.error('❌ Error during Node B recovery:', error.message);
+    console.error('Error during Node B recovery:', error.message);
     return { error: error.message, skipped: false };
   }
 }
@@ -128,15 +128,14 @@ async function recoverNodeB(sinceTimestamp = null) {
 /**
  * Run recovery for Main node (from Node A/B logs)
  * Only runs if this IS the Main node AND Main was down
- * TODO: Implement this for Case #2
  */
 async function recoverMainNode(sinceTimestamp = null) {
   if (!isMainNode()) {
-    console.log('⏭️ Skipping Main recovery - not Main node');
+    console.log('Skipping Main recovery - not Main node');
     return { skipped: true };
   }
 
-  console.log('⏭️ Main node recovery not yet implemented (Case #2)');
+  console.log('Main node recovery not yet implemented (Case #2)');
   return { skipped: true, notImplemented: true };
 }
 
@@ -149,15 +148,15 @@ async function checkUncommittedTransactions() {
     const [result] = await db.query('CALL check_uncommitted_transactions()');
     
     if (result && result[0] && result[0].length > 0) {
-      console.warn(`⚠️ Found ${result[0].length} uncommitted transactions:`);
+      console.warn(`Found ${result[0].length} uncommitted transactions:`);
       console.table(result[0]);
       return { count: result[0].length, transactions: result[0] };
     } else {
-      console.log('✅ No uncommitted transactions found');
+      console.log('No uncommitted transactions found');
       return { count: 0, transactions: [] };
     }
   } catch (error) {
-    console.error('❌ Error checking uncommitted transactions:', error.message);
+    console.error('Error checking uncommitted transactions:', error.message);
     return { error: error.message };
   }
 }
@@ -168,22 +167,19 @@ async function checkUncommittedTransactions() {
  * BLOCKS all incoming requests until complete
  */
 async function runStartupRecovery() {
-  // Set recovery in progress flag
   isRecoveryInProgress = true;
-  
-  // Create promise that tracks recovery completion
+
   recoveryPromise = (async () => {
     try {
       console.log('\n==========================================================');
-      console.log('🚀 STARTING AUTOMATIC RECOVERY CHECK');
-      console.log('🔒 ALL REQUESTS BLOCKED UNTIL RECOVERY COMPLETES');
+      console.log('STARTING AUTOMATIC RECOVERY CHECK');
+      console.log('ALL REQUESTS BLOCKED UNTIL RECOVERY COMPLETES');
       console.log('==========================================================\n');
       
       const nodeName = process.env.DB_NAME || 'unknown';
-      console.log(`📍 Current Node: ${nodeName}`);
-      console.log(`🔧 Recovery Mode: ${isMainNode() ? 'MAIN (can recover Node A/B)' : 'WORKER (recovery disabled)'}\n`);
+      console.log(`Current Node: ${nodeName}`);
+      console.log(`Recovery Mode: ${isMainNode() ? 'MAIN (can recover Node A/B)' : 'WORKER (recovery disabled)'}\n`);
 
-      // Check for uncommitted transactions first
       await checkUncommittedTransactions();
       
       // Only Main node can perform recovery
@@ -197,16 +193,15 @@ async function runStartupRecovery() {
         console.log('\n--- Recovering Main (not implemented) ---');
         await recoverMainNode();
       } else {
-        console.log('\n⏭️ This is not the Main node - automatic recovery disabled');
-        console.log('💡 Only Main node can perform automatic recovery for Node A/B');
+        console.log('\nThis is not the Main node - automatic recovery disabled');
+        console.log('Only Main node can perform automatic recovery for Node A/B');
       }
       
       console.log('\n==========================================================');
-      console.log('✅ STARTUP RECOVERY CHECK COMPLETE');
-      console.log('🔓 SERVER NOW ACCEPTING REQUESTS');
+      console.log('STARTUP RECOVERY CHECK COMPLETE');
+      console.log('SERVER NOW ACCEPTING REQUESTS');
       console.log('==========================================================\n');
     } finally {
-      // Always clear recovery flag
       isRecoveryInProgress = false;
       recoveryPromise = null;
     }
@@ -241,11 +236,11 @@ async function runPeriodicRecovery() {
  */
 function startPeriodicRecovery(intervalMinutes = 5) {
   if (!isMainNode()) {
-    console.log('⏭️ Periodic recovery disabled - not Main node');
+    console.log('Periodic recovery disabled - not Main node');
     return null;
   }
   
-  console.log(`⏰ Starting periodic recovery checks every ${intervalMinutes} minutes`);
+  console.log(`Starting periodic recovery checks every ${intervalMinutes} minutes`);
   
   const intervalMs = intervalMinutes * 60 * 1000;
   const interval = setInterval(runPeriodicRecovery, intervalMs);

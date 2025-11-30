@@ -1,12 +1,9 @@
--- ============================================================================
 -- TRANSACTION LOGGING TRIGGERS - MAIN NODE
 -- Automatically logs all INSERT, UPDATE, DELETE operations on title_ft
 -- Implements Write-Ahead Logging with deferred modification
--- ============================================================================
 
 USE `stadvdb-mco2`;
 
--- Drop existing triggers if they exist
 DROP TRIGGER IF EXISTS title_ft_before_insert;
 DROP TRIGGER IF EXISTS title_ft_after_insert;
 DROP TRIGGER IF EXISTS title_ft_before_update;
@@ -16,9 +13,7 @@ DROP TRIGGER IF EXISTS title_ft_after_delete;
 
 DELIMITER $$
 
--- ============================================================================
 -- INSERT TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER title_ft_before_insert
 BEFORE INSERT ON title_ft
@@ -68,9 +63,7 @@ BEGIN
      'INSERT', 'MAIN', NOW(6));
 END$$
 
--- ============================================================================
 -- UPDATE TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER title_ft_before_update
 BEFORE UPDATE ON title_ft
@@ -128,9 +121,7 @@ BEGIN
      'UPDATE', 'MAIN', NOW(6));
 END$$
 
--- ============================================================================
 -- DELETE TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER title_ft_before_delete
 BEFORE DELETE ON title_ft

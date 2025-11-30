@@ -1,12 +1,9 @@
--- ============================================================================
 -- TRANSACTION LOGGING TRIGGERS - NODE B
 -- Automatically logs all INSERT, UPDATE, DELETE operations on title_ft
 -- Prevents cascade logging from federated operations
--- ============================================================================
 
 USE `stadvdb-mco2-b`;
 
--- Drop existing triggers if they exist
 DROP TRIGGER IF EXISTS title_ft_before_insert;
 DROP TRIGGER IF EXISTS title_ft_after_insert;
 DROP TRIGGER IF EXISTS title_ft_before_update;
@@ -16,9 +13,7 @@ DROP TRIGGER IF EXISTS title_ft_after_delete;
 
 DELIMITER $$
 
--- ============================================================================
 -- INSERT TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER title_ft_before_insert
 BEFORE INSERT ON title_ft
@@ -83,9 +78,7 @@ BEGIN
     END IF;
 END$$
 
--- ============================================================================
 -- UPDATE TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER title_ft_before_update
 BEFORE UPDATE ON title_ft
@@ -155,9 +148,7 @@ BEGIN
     END IF;
 END$$
 
--- ============================================================================
 -- DELETE TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER title_ft_before_delete
 BEFORE DELETE ON title_ft

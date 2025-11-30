@@ -1,8 +1,4 @@
--- ============================================================================
 -- TRANSACTION LOGGING SETUP - NODE A
--- Creates transaction_log table for Write-Ahead Logging (WAL)
--- Implements Deferred Database Modification pattern
--- ============================================================================
 
 USE `stadvdb-mco2-a`;
 
@@ -32,46 +28,5 @@ CREATE TABLE IF NOT EXISTS transaction_log (
     INDEX index_type_status (log_type, transaction_id),
     INDEX index_record (record_id, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Create federated tables to access other nodes' logs
--- COMMENTED OUT: These fail when nodes are unreachable via internal IPs
--- Uncomment and fix CONNECTION strings when network connectivity is resolved
-
-/*
-DROP TABLE IF EXISTS transaction_log_main;
-DROP TABLE IF EXISTS transaction_log_node_b;
-
-CREATE TABLE transaction_log_main (
-    log_id BIGINT,
-    transaction_id VARCHAR(36),
-    log_sequence INT,
-    log_type ENUM('BEGIN', 'MODIFY', 'COMMIT', 'ABORT'),
-    timestamp TIMESTAMP(6),
-    table_name VARCHAR(64),
-    record_id VARCHAR(12),
-    column_name VARCHAR(64),
-    old_value TEXT,
-    new_value TEXT,
-    operation_type ENUM('INSERT', 'UPDATE', 'DELETE'),
-    source_node ENUM('MAIN', 'NODE_A', 'NODE_B')
-) ENGINE=FEDERATED 
-CONNECTION='mysql://g18:fuckingpassword@10.2.14.51:3306/stadvdb-mco2/transaction_log';
-
-CREATE TABLE transaction_log_node_b (
-    log_id BIGINT,
-    transaction_id VARCHAR(36),
-    log_sequence INT,
-    log_type ENUM('BEGIN', 'MODIFY', 'COMMIT', 'ABORT'),
-    timestamp TIMESTAMP(6),
-    table_name VARCHAR(64),
-    record_id VARCHAR(12),
-    column_name VARCHAR(64),
-    old_value TEXT,
-    new_value TEXT,
-    operation_type ENUM('INSERT', 'UPDATE', 'DELETE'),
-    source_node ENUM('MAIN', 'NODE_A', 'NODE_B')
-) ENGINE=FEDERATED 
-CONNECTION='mysql://g18:fuckingpassword@10.2.14.53:3306/stadvdb-mco2-b/transaction_log';
-*/
 
 SELECT 'Node A transaction logging setup complete' AS status;
