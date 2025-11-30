@@ -47,7 +47,7 @@ function App() {
     setDeleteLoading(true);
     setEditError(null);
     try {
-  const res = await fetch(`/api/titles/distributed-delete`, {
+  const res = await fetch(`${process.env.REACT_APP_API_URL}/api/titles/distributed-delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tconst: editForm.tconst }),
@@ -109,7 +109,7 @@ function App() {
     setReviewSuccess(null);
     
     try {
-      const res = await fetch('/api/titles/add-reviews', {
+      const res = await fetch(`${process.env.REACT_APP_API_URL}/api/titles/add-reviews`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -181,7 +181,7 @@ function App() {
     try {
       let url, body;
       if (editRow) {
-        url = `/api/titles/distributed-update`;
+        url = `${process.env.REACT_APP_API_URL}/api/titles/distributed-update`;
         body = JSON.stringify({
           tconst: editForm.tconst,
           primaryTitle: editForm.primaryTitle,
@@ -191,7 +191,7 @@ function App() {
           startYear: editForm.startYear,
         });
       } else {
-  url = `/api/titles/distributed-insert`;
+  url = `${process.env.REACT_APP_API_URL}/api/titles/distributed-insert`;
         body = JSON.stringify({
           tconst: editForm.tconst,
           primaryTitle: editForm.primaryTitle,
@@ -260,7 +260,7 @@ function App() {
   const fetchAggregations = () => {
     setLoadingAggregations(true);
     setAggError(null);
-  fetch(`/api/aggregation`)
+  fetch(`${process.env.REACT_APP_API_URL}/api/aggregation`)
       .then((response) => response.json())
       .then((data) => {
         setAggregations(data.data);
@@ -293,7 +293,7 @@ function App() {
 
     try {
       const res = await fetch(
-        `/api/titles/distributed-search?search_term=${encodeURIComponent(
+        `${process.env.REACT_APP_API_URL}/api/titles/distributed-search?search_term=${encodeURIComponent(
           searchTerm
         )}&limit_count=${limit}`
       );
@@ -349,7 +349,7 @@ function App() {
 
     try {
       const res = await fetch(
-        `/api/titles/distributed-select?select_column=${encodeURIComponent(
+        `${process.env.REACT_APP_API_URL}/api/titles/distributed-select?select_column=${encodeURIComponent(
           selectColumn
         )}&order_direction=${orderDirection}&limit_count=${selectLimit}`
       );
