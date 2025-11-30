@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   queueLimit: 0
 });
 
-// Promisify the pool for async/await
+// Promisify the pool for async/await//
 const promisePool = pool.promise();
 
 // Test the connection
