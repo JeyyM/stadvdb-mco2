@@ -123,6 +123,9 @@ function getBestReadNode() {
 // Get the best available node for writes
 function getBestWriteNode() {
   // For writes, priority is: MAIN -> NODE_A (if ACTING_MASTER) -> fail
+  // IMPORTANT: Main node stored procedures have error handlers that allow
+  // operations to succeed even when Node A/B are down. The transaction logs
+  // will be used for recovery when nodes come back online.
   if (nodeStatus.MAIN.available) {
     return 'MAIN';
   }
@@ -132,7 +135,7 @@ function getBestWriteNode() {
     return 'NODE_A';
   }
   
-  throw new Error('No write-capable database node available');
+  throw new Error('No write-capable database node available (Main is down and Node A is not in ACTING_MASTER mode)');
 }
 
 // Smart query executor with automatic failover

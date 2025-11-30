@@ -511,6 +511,12 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE current_transaction_id VARCHAR(36);
     
+    -- Handler for federated table errors (same pattern as distributed_insert, distributed_update, distributed_delete)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    BEGIN
+        -- Errors ignored: operation succeeded on MAIN, remote replication will be handled by recovery procedures
+    END;
+    
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         -- Log ABORT before rolling back

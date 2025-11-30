@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS transaction_log (
 
 -- Create federated tables to access other nodes' logs
 -- COMMENTED OUT: These fail when Node A/B are unreachable via internal IPs
--- Uncomment and fix CONNECTION strings when network connectivity is resolved
+-- Uncomment and fix CONNECTION strings when network connectivity is resolved dfff
 
 /*
 DROP TABLE IF EXISTS transaction_log_node_a;
