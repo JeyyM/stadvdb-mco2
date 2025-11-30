@@ -103,8 +103,13 @@ async function checkRemoteNodeHealth() {
   // Helper to ping a node
   async function pingNode(name, url, setHealthy) {
     try {
-      await axios.get(`${url}/api/recovery/status`, { timeout: 5000 });
-      setHealthy(true);
+      const response = await axios.get(`${url}/api/recovery/status`, { timeout: 5000 });
+      // Check if the node's DATABASE is healthy, not just if HTTP is responding
+      const dbHealthy = response.data?.databaseHealthy === true;
+      setHealthy(dbHealthy);
+      if (!dbHealthy) {
+        console.log(`⚠️ ${name} HTTP is up but database is down`);
+      }
     } catch (error) {
       setHealthy(false);
       console.log(`⚠️ ${name} appears to be down: ${error.message}`);
