@@ -7,7 +7,7 @@ const db = require('./db-failover');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/// Middleware
+/// Middleware//
 // Updated CORS to allow Vercel deployments
 const corsOptions = {
   origin: [
