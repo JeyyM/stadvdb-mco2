@@ -36,23 +36,6 @@ CREATE TABLE IF NOT EXISTS transaction_log (
     INDEX index_record (record_id, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============================================================================
--- RECOVERY CHECKPOINT TABLE
--- Tracks last successfully recovered transaction from each node
--- Enables idempotent, incremental recovery
--- ============================================================================
-
-DROP TABLE IF EXISTS recovery_checkpoint;
-
-CREATE TABLE IF NOT EXISTS recovery_checkpoint (
-    node_name VARCHAR(20) PRIMARY KEY,
-    last_recovered_timestamp TIMESTAMP(6),
-    last_transaction_id VARCHAR(36),
-    records_recovered INT DEFAULT 0,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_timestamp (last_recovered_timestamp)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- Create federated tables to access other nodes' logs
 -- COMMENTED OUT: These fail when Node A/B are unreachable via internal IPs
 -- Uncomment and fix CONNECTION strings when network connectivity is resolved
