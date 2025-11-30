@@ -26,6 +26,14 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Add debug headers to all responses
+app.use((req, res, next) => {
+  const currentNode = failoverProxy.getCurrentNode();
+  res.set('X-Current-Node', currentNode);
+  res.set('X-DB-Healthy', failoverProxy.isDatabaseHealthy() ? 'true' : 'false');
+  next();
+});
+
 // Middleware to force Node B to always proxy to coordinator (Main or Node A)
 app.use('/api', (req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
@@ -141,6 +149,18 @@ app.post('/api/titles/add-reviews', async (req, res) => {
 // READ-ONLY ROUTES
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
+    // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+    const proxyTarget = await failoverProxy.getProxyTarget();
+    if (proxyTarget) {
+        console.log(`🔄 Proactively proxying /api/titles/distributed-select to ${proxyTarget.name}`);
+        return failoverProxy.forwardToMain(req, res, () => {
+            res.status(500).json({
+                success: false,
+                message: 'Error in select - all nodes unavailable'
+            });
+        });
+    }
+    
     try {
         const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
         const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
@@ -195,6 +215,18 @@ app.get('/api/titles/distributed-select', async (req, res) => {
 
 // Distributed search system
 app.get('/api/titles/distributed-search', async (req, res) => {
+  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+  const proxyTarget = await failoverProxy.getProxyTarget();
+  if (proxyTarget) {
+    console.log(`🔄 Proactively proxying /api/titles/distributed-search to ${proxyTarget.name}`);
+    return failoverProxy.forwardToMain(req, res, () => {
+      res.status(500).json({
+        success: false,
+        message: 'Error in distributed_search - all nodes unavailable'
+      });
+    });
+  }
+  
   try {
     const { search_term = '', limit_count = 20 } = req.query;
     const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
@@ -239,10 +271,21 @@ app.get('/api/aggregation', async (req, res) => {
       agg.total_votes = agg.total_votes !== null ? Number(agg.total_votes) : null;
       agg.average_votes = agg.average_votes !== null ? Number(agg.average_votes) : null;
     }
+    
+    // Add debug info to response
+    const currentNode = failoverProxy.getCurrentNode();
+    res.set('X-Data-Source', 'distributed_aggregation');
+    res.set('X-Served-By', currentNode);
+    
     res.json({
       success: true,
       raw: results,
-      data: agg
+      data: agg,
+      debug: {
+        source: 'distributed_aggregation',
+        servedBy: currentNode,
+        movieCount: agg?.movie_count
+      }
     });
   } catch (error) {
     console.error('Error fetching aggregations:', error);
