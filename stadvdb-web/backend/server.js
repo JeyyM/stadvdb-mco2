@@ -14,24 +14,34 @@ app.use(express.json());
 // API ROUTES
 // Distributed delete system
 app.post('/api/titles/distributed-delete', async (req, res) => {
+  let connection;
   try {
-    const { tconst } = req.body;
+    const { tconst, sleepSeconds = 0, isolationLevel = 'READ COMMITTED'} = req.body;
     if (!tconst) {
       return res.status(400).json({ success: false, message: 'tconst is required' });
     }
-    const [results] = await db.query('CALL distributed_delete(?)', [tconst]);
+
+    connection = await db.getConnection();
+
+    await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+    const [results] = await connection.query('CALL distributed_delete(?)', [tconst, sleepSeconds]);
     res.json({ success: true, data: results });
   } catch (error) {
     console.error('Error in distributed_delete:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_delete',
-      error: error.message
-    });
+    if (error.code === 'ER_LOCK_DEADLOCK') {
+      res.status(409).json({ success: false, message: 'Deadlock detected' });
+    } else {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  } finally {
+    if (connection) connection.release();
   }
 });
+
 // Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
+  let connection;
   try {
     const {
       tconst,
@@ -39,7 +49,9 @@ app.post('/api/titles/distributed-update', async (req, res) => {
       runtimeMinutes,
       averageRating,
       numVotes,
-      startYear
+      startYear,
+      isolationLevel = 'READ COMMITTED',
+      sleepSeconds = 0
     } = req.body;
 
     // Validate required fields
@@ -47,35 +59,46 @@ app.post('/api/titles/distributed-update', async (req, res) => {
       return res.status(400).json({ success: false, message: 'tconst is required' });
     }
 
+    connection = await db.getConnection();
+
+    await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
     // Call the stored procedure (6 args)
-    const [results] = await db.query(
-      'CALL distributed_update(?, ?, ?, ?, ?, ?)',
+    const [results] = await connection.query(
+      'CALL distributed_update(?, ?, ?, ?, ?, ?, ?)',
       [
         tconst,
         primaryTitle,
         runtimeMinutes,
         averageRating,
         numVotes,
-        startYear
+        startYear,
+        sleepSeconds
       ]
     );
-    res.json({ success: true, data: results });
+    res.json({ success: true, data: results, isolationLevelUsed: isolationLevel });
   } catch (error) {
-    console.error('Error in distributed_update:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_update',
-      error: error.message
-    });
+    if (error.code === 'ER_LOCK_DEADLOCK') {
+      res.status(409).json({ success: false, message: 'Deadlock detected', code: 'ER_LOCK_DEADLOCK' });
+    } else {
+      res.status(500).json({ success: false, message: 'Error in distributed_update', error: error.message });
+    }
+  } finally {
+    if (connection) connection.release();
   }
 });
 // ============================================================================
 
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
+  let connection;
   try {
-    const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
-    const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
+    const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10, isolationLevel = 'READ COMMITTED'} = req.query;
+
+    connection = await db.getConnection();
+    await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+    const [results] = await connection.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
     res.json({
       success: true,
       count: results[0]?.length || 0,
@@ -83,18 +106,30 @@ app.get('/api/titles/distributed-select', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in distributed_select:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_select',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    if (connection) connection.release();
   }
 });
 // Distributed search system
 app.get('/api/titles/distributed-search', async (req, res) => {
+  let connection;
   try {
-    const { search_term = '', limit_count = 20 } = req.query;
-    const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
+    const {
+      search_term = '',
+      limit_count = 20,
+      isolationLevel = 'READ COMMITTED'
+    } = req.query;
+
+    connection = await db.getConnection();
+
+    await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+    const [results] = await connection.query(
+        'CALL distributed_search(?, ?)',
+        [search_term, parseInt(limit_count)]
+    );
+
     res.json({
       success: true,
       count: results[0]?.length || 0,
@@ -107,6 +142,8 @@ app.get('/api/titles/distributed-search', async (req, res) => {
       message: 'Error in distributed_search',
       error: error.message
     });
+  } finally {
+    if (connection) connection.release();
   }
 });
 

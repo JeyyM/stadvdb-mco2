@@ -85,6 +85,8 @@ END$$
 
 DELIMITER ;
 
+DROP PROCEDURE IF EXISTS distributed_update;
+
 DELIMITER $$
 
 CREATE PROCEDURE distributed_update(
@@ -93,10 +95,9 @@ CREATE PROCEDURE distributed_update(
     IN new_runtimeMinutes SMALLINT UNSIGNED,
     IN new_averageRating DECIMAL(3,1),
     IN new_numVotes INT UNSIGNED,
-    IN new_startYear SMALLINT UNSIGNED
+    IN new_startYear SMALLINT UNSIGNED,
+    IN sleep_seconds INT
 )
-
-
 BEGIN
     DECLARE old_startYear SMALLINT UNSIGNED;
     DECLARE global_mean DECIMAL(3,1);
@@ -104,88 +105,100 @@ BEGIN
     DECLARE updated_weightedRating DECIMAL(4,2);
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
+BEGIN
+ROLLBACK;
+RESIGNAL;
+END;
 
-    START TRANSACTION;
+START TRANSACTION;
 
-    -- Get initial startYear
-    SELECT startYear INTO old_startYear
-    FROM `stadvdb-mco2`.title_ft
-    WHERE tconst = new_tconst;
+-- 1. Sanitize Input (Fixes "0 rows updated" issues)
+SET new_tconst = TRIM(new_tconst);
 
-    SELECT AVG(averageRating) INTO global_mean
-    FROM `stadvdb-mco2`.title_ft
-    WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+    -- 2. Get Old Data (For fragmentation checks)
+SELECT startYear INTO old_startYear
+FROM `stadvdb-mco2`.title_ft
+WHERE tconst = new_tconst;
 
-    SET @percentile := 0.95;
-    SELECT COUNT(*) INTO @totalCount
-    FROM `stadvdb-mco2`.title_ft
-    WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
-    SET @rank_position := CEIL(@percentile * @totalCount);
+-- 3. Calculate Weighted Rating
+SELECT AVG(averageRating) INTO global_mean
+FROM `stadvdb-mco2`.title_ft
+WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+
+SET @percentile := 0.95;
+SELECT COUNT(*) INTO @totalCount
+FROM `stadvdb-mco2`.title_ft
+WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL;
+
+SET @rank_position := CEIL(@percentile * @totalCount);
     SET @rank_position := GREATEST(@rank_position, 1);
-    SELECT numVotes INTO min_votes_threshold
-    FROM (
-        SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
-        FROM `stadvdb-mco2`.title_ft
-        WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-    ) AS ordered_votes
-    WHERE row_num = @rank_position
+
+SELECT numVotes INTO min_votes_threshold
+FROM (
+         SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
+         FROM `stadvdb-mco2`.title_ft
+         WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+     ) AS ordered_votes
+WHERE row_num = @rank_position
     LIMIT 1;
 
-    SET updated_weightedRating = ROUND(
+SET updated_weightedRating = ROUND(
         (new_numVotes / (new_numVotes + min_votes_threshold)) * new_averageRating
         + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
     );
 
-    UPDATE `stadvdb-mco2`.title_ft
-    SET primaryTitle = new_primaryTitle,
-        runtimeMinutes = new_runtimeMinutes,
-        averageRating = new_averageRating,
-        numVotes = new_numVotes,
-        startYear = new_startYear,
-        weightedRating = updated_weightedRating
-    WHERE tconst = new_tconst;
+    -- 4. PERFORM THE UPDATE (This creates the "Dirty Data")
+UPDATE `stadvdb-mco2`.title_ft
+SET primaryTitle = new_primaryTitle,
+    runtimeMinutes = new_runtimeMinutes,
+    averageRating = new_averageRating,
+    numVotes = new_numVotes,
+    startYear = new_startYear,
+    weightedRating = updated_weightedRating
+WHERE tconst = new_tconst;
 
-    -- Check if you need to move to a new node
-    IF (old_startYear IS NULL OR old_startYear < 2010) AND (new_startYear >= 2010) THEN
-        -- Moving from B to A
-        DELETE FROM `stadvdb-mco2-b`.title_ft WHERE tconst = new_tconst;
-        INSERT INTO `stadvdb-mco2-a`.title_ft
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
-    ELSEIF (old_startYear >= 2010) AND (new_startYear IS NULL OR new_startYear < 2010) THEN
-        -- Moving from A to B
-        DELETE FROM `stadvdb-mco2-a`.title_ft WHERE tconst = new_tconst;
-        INSERT INTO `stadvdb-mco2-b`.title_ft
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
-    ELSE
-        -- Staying in the same node
+-- 5. MANAGE FRAGMENTATION (Move data between Node A/B if year changed)
+IF (old_startYear IS NULL OR old_startYear < 2010) AND (new_startYear >= 2010) THEN
+        -- Move from Node B -> Node A
+DELETE FROM `stadvdb-mco2-b`.title_ft WHERE tconst = new_tconst;
+INSERT INTO `stadvdb-mco2-a`.title_ft
+VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
+
+ELSEIF (old_startYear >= 2010) AND (new_startYear IS NULL OR new_startYear < 2010) THEN
+        -- Move from Node A -> Node B
+DELETE FROM `stadvdb-mco2-a`.title_ft WHERE tconst = new_tconst;
+INSERT INTO `stadvdb-mco2-b`.title_ft
+VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, updated_weightedRating);
+
+ELSE
+        -- Update in place
         IF new_startYear IS NULL OR new_startYear < 2010 THEN
-            UPDATE `stadvdb-mco2-b`.title_ft
-            SET primaryTitle = new_primaryTitle,
-                runtimeMinutes = new_runtimeMinutes,
-                averageRating = new_averageRating,
-                numVotes = new_numVotes,
-                startYear = new_startYear,
-                weightedRating = updated_weightedRating
-            WHERE tconst = new_tconst;
-        ELSE
-            UPDATE `stadvdb-mco2-a`.title_ft
-            SET primaryTitle = new_primaryTitle,
-                runtimeMinutes = new_runtimeMinutes,
-                averageRating = new_averageRating,
-                numVotes = new_numVotes,
-                startYear = new_startYear,
-                weightedRating = updated_weightedRating
-            WHERE tconst = new_tconst;
-        END IF;
-    END IF;
+UPDATE `stadvdb-mco2-b`.title_ft
+SET primaryTitle = new_primaryTitle,
+    runtimeMinutes = new_runtimeMinutes,
+    averageRating = new_averageRating,
+    numVotes = new_numVotes,
+    startYear = new_startYear,
+    weightedRating = updated_weightedRating
+WHERE tconst = new_tconst;
+ELSE
+UPDATE `stadvdb-mco2-a`.title_ft
+SET primaryTitle = new_primaryTitle,
+    runtimeMinutes = new_runtimeMinutes,
+    averageRating = new_averageRating,
+    numVotes = new_numVotes,
+    startYear = new_startYear,
+    weightedRating = updated_weightedRating
+WHERE tconst = new_tconst;
+END IF;
+END IF;
 
-    COMMIT;
+    -- 6. SLEEP (Pause here so Readers can see the uncommitted change)
+    IF sleep_seconds > 0 THEN
+SELECT SLEEP(sleep_seconds);
+END IF;
+
+COMMIT;
 END$$
 
 DELIMITER ;
@@ -193,7 +206,8 @@ DELIMITER ;
 DELIMITER $$
 
 CREATE PROCEDURE distributed_delete(
-    IN new_tconst VARCHAR(12)
+    IN new_tconst VARCHAR(12),
+    IN sleep_seconds INT
 )
 
 BEGIN
@@ -210,6 +224,10 @@ BEGIN
 
     DELETE FROM `stadvdb-mco2-a`.title_ft WHERE tconst = new_tconst;
     DELETE FROM `stadvdb-mco2-b`.title_ft WHERE tconst = new_tconst;
+
+    IF sleep_seconds > 0 THEN
+    SELECT SLEEP(sleep_seconds);
+    END IF;
 
     COMMIT;
 END$$

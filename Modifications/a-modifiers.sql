@@ -36,7 +36,8 @@ CREATE PROCEDURE distributed_update(
     IN new_runtimeMinutes SMALLINT UNSIGNED,
     IN new_averageRating DECIMAL(3,1),
     IN new_numVotes INT UNSIGNED,
-    IN new_startYear SMALLINT UNSIGNED
+    IN new_startYear SMALLINT UNSIGNED,
+    IN sleep_seconds INT
 )
 BEGIN
     CALL `stadvdb-mco2`.distributed_update(
@@ -45,15 +46,17 @@ BEGIN
         new_runtimeMinutes,
         new_averageRating,
         new_numVotes,
-        new_startYear
+        new_startYear,
+        sleep_seconds
     );
 END$$
 
 CREATE PROCEDURE distributed_delete(
-    IN new_tconst VARCHAR(12)
+    IN new_tconst VARCHAR(12),
+    IN sleep_seconds INT
 )
 BEGIN
-    CALL `stadvdb-mco2`.distributed_delete(new_tconst);
+    CALL `stadvdb-mco2`.distributed_delete(new_tconst, sleep_seconds);
 END$$
 
 
