@@ -26,6 +26,19 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Middleware to force Node B to always proxy to coordinator (Main or Node A)
+app.use('/api', (req, res, next) => {
+  const currentNode = failoverProxy.getCurrentNode();
+  
+  // Node B ALWAYS proxies to Main/Node A (acts as simple client, not coordinator)
+  if (currentNode === 'NODE_B') {
+    return failoverProxy.forwardToMain(req, res, next);
+  }
+  
+  // Main and Node A use their own databases
+  next();
+});
+
 // ============================================================================
 // API ROUTES
 
