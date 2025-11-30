@@ -7,7 +7,7 @@ USE `stadvdb-mco2`;
 
 -- ============================================================================
 -- DROP OLD FEDERATED TABLES (with wrong connection strings)
--- ============================================================================
+-- =============================================================================
 
 DROP TABLE IF EXISTS title_ft_node_a;
 DROP TABLE IF EXISTS title_ft_node_b;
