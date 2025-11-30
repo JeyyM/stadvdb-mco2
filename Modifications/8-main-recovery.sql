@@ -16,7 +16,7 @@ DELIMITER $$
 -- ============================================================================
 
 CREATE PROCEDURE recover_from_node_a()
-BEGIN
+proc_label: BEGIN
     DECLARE checkpoint_timestamp TIMESTAMP(6);
     DECLARE last_node_a_timestamp TIMESTAMP(6);
     DECLARE recovery_count INT DEFAULT 0;
@@ -63,7 +63,7 @@ BEGIN
         SELECT CONCAT('✓ Already recovered. Checkpoint: ', checkpoint_timestamp, 
                      ', Node A latest: ', last_node_a_timestamp) AS status;
         SELECT 'No recovery needed - already up to date.' AS result;
-        LEAVE recover_from_node_a;
+        LEAVE proc_label;
     END IF;
     
     SELECT CONCAT('Recovery needed. Checkpoint: ', checkpoint_timestamp, 
