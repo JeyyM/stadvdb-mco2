@@ -135,15 +135,45 @@ app.get('/api/titles/distributed-select', async (req, res) => {
     } catch (error) {
         console.error('Error in select:', error);
         
-        // Check if it's a connection error - proxy to Main
+        // Check if procedure doesn't exist (Node A/B) or connection error
+        const procedureNotFound = error.code === 'ER_SP_DOES_NOT_EXIST' || 
+                                  error.message?.includes('PROCEDURE') ||
+                                  error.message?.includes('does not exist');
         const isConnectionError = error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || 
                                   error.message?.includes('connect ETIMEDOUT') || 
-                                  error.message?.includes('connect ECONNREFUSED');
+                                  error.message?.includes('connect ECONNREFUSED') ||
+                                  error.message?.includes('Unable to connect to foreign data source');
         
-        if (isConnectionError) {
-          return failoverProxy.forwardToMain(req, res, () => {
-            res.status(500).json({ message: 'Error in select', error: error.message });
-          });
+        // If procedure doesn't exist or connection error, use local select
+        if (procedureNotFound || isConnectionError) {
+          console.log('   Using local select (distributed procedure not available)');
+          try {
+            const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
+            
+            // Validate inputs
+            const validColumns = ['primaryTitle', 'numVotes', 'averageRating', 'weightedRating', 'startYear', 'tconst', 'runtimeMinutes'];
+            const column = validColumns.includes(select_column) ? select_column : 'averageRating';
+            const direction = order_direction === 'ASC' ? 'ASC' : 'DESC';
+            const limit = Math.min(Math.max(parseInt(limit_count) || 10, 1), 100);
+            
+            const [localResults] = await db.query(
+              `SELECT * FROM title_ft ORDER BY ${column} ${direction} LIMIT ?`,
+              [limit]
+            );
+            
+            return res.json({ 
+              success: true, 
+              count: localResults?.length || 0, 
+              data: localResults || [],
+              source: 'local'
+            });
+          } catch (localError) {
+            console.error('Error in local select:', localError);
+            // Try proxying
+            return failoverProxy.forwardToMain(req, res, () => {
+              res.status(500).json({ message: 'Error in select', error: localError.message });
+            });
+          }
         }
         
         res.status(500).json({ message: 'Error in select', error: error.message });
@@ -173,6 +203,7 @@ app.get('/api/titles/distributed-search', async (req, res) => {
 // Aggregation Route
 app.get('/api/aggregation', async (req, res) => {
   try {
+    // Try to call distributed_aggregation if it exists (Main node)
     const [results] = await db.query('CALL distributed_aggregation()', []);
     let agg = results[0] && results[0][0] ? results[0][0] : null;
     if (agg) {
@@ -190,19 +221,55 @@ app.get('/api/aggregation', async (req, res) => {
   } catch (error) {
     console.error('Error fetching aggregations:', error);
     
-    // Check if it's a connection error and we're not Main
-    const isConnectionError = error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || 
+    // Check if procedure doesn't exist (Node A/B) or connection error
+    const procedureNotFound = error.code === 'ER_SP_DOES_NOT_EXIST' || 
+                              error.message?.includes('PROCEDURE') ||
+                              error.message?.includes('does not exist');
+    const isConnectionError = error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNREFUSED' || 
                               error.message?.includes('connect ETIMEDOUT') || 
-                              error.message?.includes('connect ECONNREFUSED');
+                              error.message?.includes('connect ECONNREFUSED') ||
+                              error.message?.includes('Unable to connect to foreign data source');
     
-    if (isConnectionError) {
-      return failoverProxy.forwardToMain(req, res, () => {
-        res.status(500).json({
-          success: false,
-          message: 'Error fetching aggregations',
-          error: error.message
+    // If procedure doesn't exist or connection error, use local aggregation
+    if (procedureNotFound || isConnectionError) {
+      console.log('   Using local aggregation (distributed procedure not available)');
+      try {
+        const [localResults] = await db.query(`
+          SELECT 
+            COUNT(*) AS movie_count,
+            AVG(averageRating) AS average_rating,
+            AVG(weightedRating) AS average_weightedRating,
+            SUM(numVotes) AS total_votes,
+            AVG(numVotes) AS average_votes
+          FROM title_ft
+        `);
+        
+        let agg = localResults[0];
+        if (agg) {
+          agg.movie_count = Number(agg.movie_count);
+          agg.average_rating = agg.average_rating !== null ? Number(agg.average_rating) : null;
+          agg.average_weightedRating = agg.average_weightedRating !== null ? Number(agg.average_weightedRating) : null;
+          agg.total_votes = agg.total_votes !== null ? Number(agg.total_votes) : null;
+          agg.average_votes = agg.average_votes !== null ? Number(agg.average_votes) : null;
+        }
+        
+        return res.json({
+          success: true,
+          data: agg,
+          source: 'local' // Indicate this is local data
         });
-      });
+      } catch (localError) {
+        console.error('Error in local aggregation:', localError);
+        // If local also fails, try proxying to another node
+        return failoverProxy.forwardToMain(req, res, () => {
+          res.status(500).json({
+            success: false,
+            message: 'Error fetching aggregations',
+            error: localError.message
+          });
+        });
+      }
     }
     
     res.status(500).json({
