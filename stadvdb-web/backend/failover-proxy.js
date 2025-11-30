@@ -132,7 +132,7 @@ async function forwardToMain(req, res, next) {
   await checkRemoteNodeHealth();
 
   // Determine proxy target
-  const proxyTarget = getProxyTarget();
+  const proxyTarget = await getProxyTarget();
   
   if (!proxyTarget) {
     // No proxy target available
