@@ -51,7 +51,7 @@ CREATE TABLE transaction_log_main (
     operation_type ENUM('INSERT', 'UPDATE', 'DELETE'),
     source_node ENUM('MAIN', 'NODE_A', 'NODE_B')
 ) ENGINE=FEDERATED 
-CONNECTION='mysql://root:12345@ccscloud.dlsu.edu.ph:60751/stadvdb-mco2/transaction_log';
+CONNECTION='mysql://g18:fuckingpassword@10.2.14.51:3306/stadvdb-mco2/transaction_log';
 
 CREATE TABLE transaction_log_node_a (
     log_id BIGINT,
@@ -67,6 +67,6 @@ CREATE TABLE transaction_log_node_a (
     operation_type ENUM('INSERT', 'UPDATE', 'DELETE'),
     source_node ENUM('MAIN', 'NODE_A', 'NODE_B')
 ) ENGINE=FEDERATED 
-CONNECTION='mysql://root:12345@ccscloud.dlsu.edu.ph:60752/stadvdb-mco2-a/transaction_log';
+CONNECTION='mysql://g18:fuckingpassword@10.2.14.52:3306/stadvdb-mco2-a/transaction_log';
 
 SELECT 'Node B transaction logging setup complete' AS status;
