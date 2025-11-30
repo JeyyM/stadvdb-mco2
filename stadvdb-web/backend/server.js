@@ -72,6 +72,22 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     
   } catch (error) {
     console.error('Insert Error:', error);
+    
+    // Check if it's a connection error
+    const isConnectionError = error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNREFUSED' ||
+                              error.code === 'EHOSTUNREACH' ||
+                              error.message?.includes('connect ETIMEDOUT') || 
+                              error.message?.includes('connect ECONNREFUSED') ||
+                              error.message?.includes('connect EHOSTUNREACH');
+    
+    if (isConnectionError) {
+      // Try to proxy to another node
+      return failoverProxy.forwardToMain(req, res, () => {
+        res.status(500).json({ success: false, message: 'Insert Error - all nodes unavailable', error: error.message });
+      });
+    }
+    
     res.status(500).json({ success: false, message: 'Insert Error', error: error.message });
   }
 });
@@ -93,6 +109,22 @@ app.post('/api/titles/distributed-update', async (req, res) => {
     
   } catch (error) {
     console.error('Update Error:', error);
+    
+    // Check if it's a connection error
+    const isConnectionError = error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNREFUSED' ||
+                              error.code === 'EHOSTUNREACH' ||
+                              error.message?.includes('connect ETIMEDOUT') || 
+                              error.message?.includes('connect ECONNREFUSED') ||
+                              error.message?.includes('connect EHOSTUNREACH');
+    
+    if (isConnectionError) {
+      // Try to proxy to another node
+      return failoverProxy.forwardToMain(req, res, () => {
+        res.status(500).json({ success: false, message: 'Update Error - all nodes unavailable', error: error.message });
+      });
+    }
+    
     res.status(500).json({ success: false, message: 'Update Error', error: error.message });
   }
 });
@@ -114,6 +146,22 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
     
   } catch (error) {
     console.error('Delete Error:', error);
+    
+    // Check if it's a connection error
+    const isConnectionError = error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNREFUSED' ||
+                              error.code === 'EHOSTUNREACH' ||
+                              error.message?.includes('connect ETIMEDOUT') || 
+                              error.message?.includes('connect ECONNREFUSED') ||
+                              error.message?.includes('connect EHOSTUNREACH');
+    
+    if (isConnectionError) {
+      // Try to proxy to another node
+      return failoverProxy.forwardToMain(req, res, () => {
+        res.status(500).json({ success: false, message: 'Delete Error - all nodes unavailable', error: error.message });
+      });
+    }
+    
     res.status(500).json({ success: false, message: 'Delete Error', error: error.message });
   }
 });
@@ -145,6 +193,22 @@ app.post('/api/titles/add-reviews', async (req, res) => {
     
   } catch (error) {
     console.error('Add Reviews Error:', error);
+    
+    // Check if it's a connection error
+    const isConnectionError = error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNREFUSED' ||
+                              error.code === 'EHOSTUNREACH' ||
+                              error.message?.includes('connect ETIMEDOUT') || 
+                              error.message?.includes('connect ECONNREFUSED') ||
+                              error.message?.includes('connect EHOSTUNREACH');
+    
+    if (isConnectionError) {
+      // Try to proxy to another node
+      return failoverProxy.forwardToMain(req, res, () => {
+        res.status(500).json({ success: false, message: 'Add Reviews Error - all nodes unavailable', error: error.message });
+      });
+    }
+    
     res.status(500).json({ success: false, message: 'Add Reviews Error', error: error.message });
   }
 });
