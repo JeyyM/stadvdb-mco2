@@ -10,15 +10,18 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 /// Middleware//
-// Updated CORS to allow Vercel deployments
+// Updated CORS to allow Vercel deployments and all Render frontends
 const corsOptions = {
   origin: [
     'http://localhost:3000',
     'http://localhost:60751',
     'http://localhost:60752',
     'http://localhost:60753',
+    'https://stadvdb-mco2-main-node.onrender.com',
+    'https://stadvdb-mco2-a-node.onrender.com',
+    'https://stadvdb-mco2-b-node.onrender.com',
     /\.vercel\.app$/, // Allow all Vercel deployments
-    /\.onrender\.com$/ // Allow Render deployments
+    /\.onrender\.com$/ // Allow all Render deployments
   ],
   credentials: true,
   optionsSuccessStatus: 200
