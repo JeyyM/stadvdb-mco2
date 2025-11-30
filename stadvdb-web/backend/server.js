@@ -4,6 +4,7 @@ require('dotenv').config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
 // Use simple direct database connection//
 const db = require('./db');
 const recovery = require('./recovery');
+const failoverProxy = require('./failover-proxy');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -24,6 +25,9 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
+
+// Failover proxy middleware - automatically forwards to Main when local DB is down
+app.use('/api', failoverProxy.forwardToMain);
 
 // ============================================================================
 // API ROUTES
@@ -322,7 +326,25 @@ app.get('/api/recovery/status', (req, res) => {
     isNodeA: recovery.isNodeA(),
     isNodeB: recovery.isNodeB(),
     canRecover: recovery.isMainNode(),
-    periodicRecoveryEnabled: recovery.isMainNode()
+    periodicRecoveryEnabled: recovery.isMainNode(),
+    databaseHealthy: failoverProxy.isDatabaseHealthy()
+  });
+});
+
+// ============================================================================
+// ERROR HANDLERS
+// ============================================================================
+
+// Database error handler - catches connection errors and proxies to Main
+app.use(failoverProxy.handleDatabaseError);
+
+// Generic error handler
+app.use((error, req, res, next) => {
+  console.error('❌ Unhandled error:', error);
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+    error: error.message
   });
 });
 
@@ -331,8 +353,15 @@ app.get('/api/recovery/status', (req, res) => {
 // ============================================================================
 
 app.listen(PORT, async () => {
+  const DB_NAME = process.env.DB_NAME || 'stadvdb-mco2';
+  const NODE_TYPE = DB_NAME === 'stadvdb-mco2' ? 'MAIN' : 
+                    DB_NAME === 'stadvdb-mco2-a' ? 'NODE_A' : 
+                    DB_NAME === 'stadvdb-mco2-b' ? 'NODE_B' : 'MAIN';
+  
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
   console.log(`📊 API endpoints available at http://localhost:${PORT}/api`);
+  console.log(`🔧 Node type: ${NODE_TYPE}`);
+  console.log(`🔄 Failover to Main: ${NODE_TYPE !== 'MAIN' ? 'ENABLED' : 'N/A (this is Main)'}`);
   
   // Run automatic recovery check on startup
   try {
