@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
 // Use simple direct database connection//
 const db = require('./db');
+const recovery = require('./recovery');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -274,10 +275,73 @@ app.get('/api/test', (req, res) => {
 });
 
 // ============================================================================
+// RECOVERY API ENDPOINTS
+// ============================================================================
+
+// Manual recovery trigger for Node A
+app.post('/api/recovery/node-a', async (req, res) => {
+  try {
+    const { sinceTimestamp } = req.body;
+    const result = await recovery.recoverNodeA(sinceTimestamp);
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Recovery API Error (Node A):', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Manual recovery trigger for Node B
+app.post('/api/recovery/node-b', async (req, res) => {
+  try {
+    const { sinceTimestamp } = req.body;
+    const result = await recovery.recoverNodeB(sinceTimestamp);
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Recovery API Error (Node B):', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Check for uncommitted transactions
+app.get('/api/recovery/uncommitted', async (req, res) => {
+  try {
+    const result = await recovery.checkUncommittedTransactions();
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Recovery API Error (Uncommitted):', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get recovery status
+app.get('/api/recovery/status', (req, res) => {
+  res.json({
+    success: true,
+    node: process.env.DB_NAME || 'unknown',
+    isMain: recovery.isMainNode(),
+    isNodeA: recovery.isNodeA(),
+    isNodeB: recovery.isNodeB(),
+    canRecover: recovery.isMainNode(),
+    periodicRecoveryEnabled: recovery.isMainNode()
+  });
+});
+
+// ============================================================================
 // START SERVER
 // ============================================================================
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
   console.log(`📊 API endpoints available at http://localhost:${PORT}/api`);
+  
+  // Run automatic recovery check on startup
+  try {
+    await recovery.runStartupRecovery();
+  } catch (error) {
+    console.error('❌ Error during startup recovery:', error.message);
+    console.error('⚠️ Server will continue running, but recovery may be incomplete');
+  }
+  
+  // Start periodic recovery checks (every 5 minutes)
+  recovery.startPeriodicRecovery(5);
 });
