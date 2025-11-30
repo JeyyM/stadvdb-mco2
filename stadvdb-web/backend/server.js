@@ -348,12 +348,18 @@ app.get('/api/recovery/status', (req, res) => {
   res.json({
     success: true,
     node: process.env.DB_NAME || 'unknown',
+    currentNode: failoverProxy.getCurrentNode(),
     isMain: recovery.isMainNode(),
     isNodeA: recovery.isNodeA(),
     isNodeB: recovery.isNodeB(),
     canRecover: recovery.isMainNode(),
     periodicRecoveryEnabled: recovery.isMainNode(),
-    databaseHealthy: failoverProxy.isDatabaseHealthy()
+    databaseHealthy: failoverProxy.isDatabaseHealthy(),
+    failoverStatus: {
+      mainHealthy: failoverProxy.isMainHealthy(),
+      nodeAHealthy: failoverProxy.isNodeAHealthy(),
+      nodeBHealthy: failoverProxy.isNodeBHealthy()
+    }
   });
 });
 

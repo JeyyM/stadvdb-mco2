@@ -15,12 +15,23 @@ const DB_NAME = process.env.DB_NAME || 'stadvdb-mco2';
 const CURRENT_NODE = DB_NAME === 'stadvdb-mco2' ? 'MAIN' : 
                      DB_NAME === 'stadvdb-mco2-a' ? 'NODE_A' : 
                      DB_NAME === 'stadvdb-mco2-b' ? 'NODE_B' : 'MAIN';
-const MAIN_API_URL = 'https://stadvdb-mco2-main.onrender.com';
 
-// Track database health
+// Failover hierarchy: Main → Node A → Node B
+const MAIN_API_URL = 'https://stadvdb-mco2-main.onrender.com';
+const NODE_A_API_URL = 'https://stadvdb-mco2-a.onrender.com';
+const NODE_B_API_URL = 'https://stadvdb-mco2-b.onrender.com';
+
+// Track health of all nodes
 let isDatabaseHealthy = true;
 let lastHealthCheck = Date.now();
 const HEALTH_CHECK_INTERVAL = 30000; // Check every 30 seconds
+
+// Cache for remote node health
+let mainNodeHealthy = true;
+let nodeAHealthy = true;
+let nodeBHealthy = true;
+let lastRemoteHealthCheck = 0;
+const REMOTE_HEALTH_CHECK_INTERVAL = 15000; // Check remote nodes every 15 seconds
 
 /**
  * Check if database connection is healthy
@@ -38,51 +49,123 @@ async function checkDatabaseHealth() {
 }
 
 /**
+ * Check health of remote nodes
+ */
+async function checkRemoteNodeHealth() {
+  const now = Date.now();
+  if (now - lastRemoteHealthCheck < REMOTE_HEALTH_CHECK_INTERVAL) {
+    return; // Don't check too frequently
+  }
+  lastRemoteHealthCheck = now;
+
+  // Check Main node health
+  if (CURRENT_NODE !== 'MAIN') {
+    try {
+      await axios.get(`${MAIN_API_URL}/api/recovery/status`, { timeout: 5000 });
+      mainNodeHealthy = true;
+    } catch (error) {
+      mainNodeHealthy = false;
+      console.log('⚠️ Main node appears to be down');
+    }
+  }
+
+  // Check Node A health (if we're Node B)
+  if (CURRENT_NODE === 'NODE_B') {
+    try {
+      await axios.get(`${NODE_A_API_URL}/api/recovery/status`, { timeout: 5000 });
+      nodeAHealthy = true;
+    } catch (error) {
+      nodeAHealthy = false;
+      console.log('⚠️ Node A appears to be down');
+    }
+  }
+}
+
+/**
+ * Determine which node to proxy to based on failover hierarchy
+ * Hierarchy: Main → Node A → Node B (local fallback)
+ */
+function getProxyTarget() {
+  if (CURRENT_NODE === 'NODE_B') {
+    // Node B: Try Main first, then Node A
+    if (mainNodeHealthy) {
+      return { url: MAIN_API_URL, name: 'Main' };
+    } else if (nodeAHealthy) {
+      return { url: NODE_A_API_URL, name: 'Node A' };
+    }
+    return null; // No proxy available, use local data
+  } else if (CURRENT_NODE === 'NODE_A') {
+    // Node A: Try Main only (A is second in hierarchy)
+    if (mainNodeHealthy) {
+      return { url: MAIN_API_URL, name: 'Main' };
+    }
+    return null; // No proxy available, Node A will handle distributed operations
+  } else {
+    // Main node never proxies
+    return null;
+  }
+}
+
+/**
  * Periodic health check
  */
 setInterval(async () => {
   await checkDatabaseHealth();
+  await checkRemoteNodeHealth();
 }, HEALTH_CHECK_INTERVAL);
 
 /**
- * Forward request to Main node
+ * Forward request to another node based on failover hierarchy
  */
 async function forwardToMain(req, res, next) {
-  // Only forward if we're NOT the Main node
-  if (CURRENT_NODE === 'MAIN') {
-    return next(); // Main always uses its own database
+  // Check remote node health first
+  await checkRemoteNodeHealth();
+
+  // Determine proxy target
+  const proxyTarget = getProxyTarget();
+  
+  if (!proxyTarget) {
+    // No proxy target available - use local database
+    if (CURRENT_NODE === 'NODE_A' && !isDatabaseHealthy) {
+      return res.status(503).json({
+        success: false,
+        message: 'Service temporarily unavailable - all nodes unreachable',
+        node: CURRENT_NODE
+      });
+    }
+    return next(); // Use local database
   }
 
-  // Database is down - proxy to Main
-  console.log(`🔄 ${CURRENT_NODE} database unavailable, proxying ${req.method} ${req.originalUrl} to Main`);
+  // Proxy to target node
+  console.log(`🔄 ${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`);
 
   try {
     // Use originalUrl to get the full path with query string
-    const mainUrl = `${MAIN_API_URL}${req.originalUrl}`;
+    const targetUrl = `${proxyTarget.url}${req.originalUrl}`;
     
-    console.log(`   Proxying to: ${mainUrl}`);
+    console.log(`   Proxying to: ${targetUrl}`);
     
     let response;
     if (req.method === 'GET') {
-      response = await axios.get(mainUrl, {
+      response = await axios.get(targetUrl, {
         timeout: 30000
       });
     } else if (req.method === 'POST') {
-      response = await axios.post(mainUrl, req.body, {
+      response = await axios.post(targetUrl, req.body, {
         headers: {
           'Content-Type': 'application/json'
         },
         timeout: 30000
       });
     } else if (req.method === 'PUT') {
-      response = await axios.put(mainUrl, req.body, {
+      response = await axios.put(targetUrl, req.body, {
         headers: {
           'Content-Type': 'application/json'
         },
         timeout: 30000
       });
     } else if (req.method === 'DELETE') {
-      response = await axios.delete(mainUrl, {
+      response = await axios.delete(targetUrl, {
         data: req.body,
         headers: {
           'Content-Type': 'application/json'
@@ -96,24 +179,53 @@ async function forwardToMain(req, res, next) {
       });
     }
 
-    // Forward the response from Main
-    console.log(`   ✅ Proxy success: ${response.status}`);
+    // Forward the response from target
+    console.log(`   ✅ Proxy success: ${response.status} from ${proxyTarget.name}`);
     res.status(response.status).json(response.data);
     
   } catch (error) {
-    console.error('❌ Error proxying to Main:', error.message);
-    if (error.response) {
-      console.error('   Response status:', error.response.status);
-      console.error('   Response data:', error.response.data);
+    console.error(`❌ Error proxying to ${proxyTarget.name}:`, error.message);
+    
+    // Mark target as unhealthy
+    if (proxyTarget.url === MAIN_API_URL) {
+      mainNodeHealthy = false;
+    } else if (proxyTarget.url === NODE_A_API_URL) {
+      nodeAHealthy = false;
     }
     
-    // If Main is also down, return error
+    // Try next in failover chain
+    if (CURRENT_NODE === 'NODE_B' && proxyTarget.url === MAIN_API_URL && nodeAHealthy) {
+      console.log('🔄 Retrying with Node A...');
+      const retryTarget = { url: NODE_A_API_URL, name: 'Node A' };
+      try {
+        const targetUrl = `${retryTarget.url}${req.originalUrl}`;
+        let response;
+        if (req.method === 'GET') {
+          response = await axios.get(targetUrl, { timeout: 30000 });
+        } else if (req.method === 'POST') {
+          response = await axios.post(targetUrl, req.body, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
+        }
+        console.log(`   ✅ Retry success: ${response.status} from ${retryTarget.name}`);
+        return res.status(response.status).json(response.data);
+      } catch (retryError) {
+        console.error(`❌ Retry to Node A also failed: ${retryError.message}`);
+        nodeAHealthy = false;
+      }
+    }
+    
+    // All proxies failed - use local data if available
+    if (isDatabaseHealthy) {
+      console.log(`⚠️ All remote nodes down, falling back to local ${CURRENT_NODE} data`);
+      return next();
+    }
+    
+    // Everything is down
     res.status(503).json({
       success: false,
-      message: 'Service temporarily unavailable - both local database and Main node are unreachable',
+      message: 'Service temporarily unavailable - all nodes unreachable',
       error: error.message,
       node: CURRENT_NODE,
-      attemptedUrl: `${MAIN_API_URL}${req.originalUrl}`
+      attemptedTargets: [proxyTarget.name]
     });
   }
 }
@@ -191,5 +303,9 @@ module.exports = {
   handleDatabaseError,
   checkDatabaseHealth,
   queryWithFailover,
-  isDatabaseHealthy: () => isDatabaseHealthy
+  isDatabaseHealthy: () => isDatabaseHealthy,
+  isMainHealthy: () => mainNodeHealthy,
+  isNodeAHealthy: () => nodeAHealthy,
+  isNodeBHealthy: () => nodeBHealthy,
+  getCurrentNode: () => CURRENT_NODE
 };
