@@ -55,6 +55,12 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
     DECLARE current_transaction_id VARCHAR(36);
+    
+    -- Handler for federated table errors (just continue, don't crash)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    BEGIN
+        -- Federated table connection failed - continue without replication
+    END;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -188,6 +194,15 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE updated_weightedRating DECIMAL(4,2);
     DECLARE current_transaction_id VARCHAR(36);
+    
+    -- Handler for federated table errors (just continue, don't crash)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    BEGIN
+        -- Error 1429: Unable to connect to foreign data source
+        -- Error 1158: Got an error reading communication packets
+        -- Error 1189: Net read timeout
+        -- Just continue - federated replication will fail silently
+    END;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -388,6 +403,12 @@ BEGIN
     DECLARE old_averageRating DECIMAL(3,1);
     DECLARE old_numVotes INT UNSIGNED;
     DECLARE old_weightedRating DECIMAL(10,2);
+    
+    -- Handler for federated table errors (just continue, don't crash)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    BEGIN
+        -- Federated table connection failed - continue without replication
+    END;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN

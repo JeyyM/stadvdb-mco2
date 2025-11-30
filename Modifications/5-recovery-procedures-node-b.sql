@@ -138,8 +138,7 @@ BEGIN
     SELECT 
         (SELECT COUNT(*) FROM title_ft) AS node_b_count,
         (SELECT COUNT(*) FROM title_ft_main WHERE startYear < 2025 OR startYear IS NULL) AS main_node_b_partition,
-        (SELECT COUNT(*) FROM title_ft WHERE startYear >= 2025) AS wrong_partition
-    AS summary;
+        (SELECT COUNT(*) FROM title_ft WHERE startYear >= 2025) AS wrong_partition;
 END$$
 
 DELIMITER ;
