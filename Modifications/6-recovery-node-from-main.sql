@@ -1,9 +1,30 @@
 -- ============================================================================
 -- RECOVERY: Use Main's Logs to Recover Node A or Node B
 -- Case #4: Node A/B recovers from failure and missed transactions
+-- WITH CHECKPOINT SYSTEM to prevent duplicate replay
 -- ============================================================================
 
 USE `stadvdb-mco2`;
+
+-- ============================================================================
+-- 0. CREATE RECOVERY CHECKPOINT TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS recovery_checkpoint (
+    node_name VARCHAR(50) PRIMARY KEY,
+    last_recovery_timestamp TIMESTAMP(6) NOT NULL,
+    recovery_count INT UNSIGNED DEFAULT 0,
+    last_transaction_id VARCHAR(50),
+    updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB;
+
+-- Initialize checkpoint entries
+INSERT INTO recovery_checkpoint (node_name, last_recovery_timestamp, recovery_count)
+VALUES 
+    ('node_a', '2000-01-01 00:00:00.000000', 0),
+    ('node_b', '2000-01-01 00:00:00.000000', 0)
+ON DUPLICATE KEY UPDATE node_name = node_name;
+
+SELECT '✅ Recovery checkpoint table created' AS status;
 
 -- ============================================================================
 -- 1. FIND MISSING TRANSACTIONS ON NODE A (compared to Main's log)
@@ -16,8 +37,16 @@ CREATE PROCEDURE find_missing_on_node_a(
     IN since_timestamp TIMESTAMP(6)
 )
 BEGIN
+    DECLARE checkpoint_time TIMESTAMP(6);
+    
+    -- Get last checkpoint time (use the LATER of checkpoint vs provided timestamp)
+    SELECT GREATEST(last_recovery_timestamp, since_timestamp)
+    INTO checkpoint_time
+    FROM recovery_checkpoint
+    WHERE node_name = 'node_a';
+    
     -- Find committed transactions in Main's log that should have gone to Node A
-    -- but are missing from Node A's log
+    -- but are AFTER the last checkpoint
     SELECT 
         tm.transaction_id,
         tm.timestamp,
@@ -28,21 +57,13 @@ BEGIN
         tm.table_name
     FROM transaction_log tm
     WHERE tm.log_type = 'COMMIT'
-      AND tm.timestamp >= since_timestamp
+      AND tm.timestamp > checkpoint_time  -- Only transactions AFTER last checkpoint
       AND tm.operation_type IS NOT NULL
       -- Check if this record should be on Node A (startYear >= 2025)
       AND (
           (tm.operation_type = 'INSERT' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
           OR (tm.operation_type = 'UPDATE' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
           OR (tm.operation_type = 'DELETE' AND JSON_EXTRACT(tm.old_value, '$.startYear') >= 2025)
-      )
-      -- Check if it's missing from Node A's log
-      AND NOT EXISTS (
-        SELECT 1 FROM transaction_log_node_a tl_a
-        WHERE tl_a.record_id = tm.record_id
-          AND tl_a.timestamp BETWEEN tm.timestamp - INTERVAL 5 SECOND
-                                 AND tm.timestamp + INTERVAL 5 SECOND
-          AND tl_a.log_type = 'COMMIT'
       )
     ORDER BY tm.timestamp ASC;
 END$$
@@ -60,8 +81,16 @@ CREATE PROCEDURE find_missing_on_node_b(
     IN since_timestamp TIMESTAMP(6)
 )
 BEGIN
+    DECLARE checkpoint_time TIMESTAMP(6);
+    
+    -- Get last checkpoint time (use the LATER of checkpoint vs provided timestamp)
+    SELECT GREATEST(last_recovery_timestamp, since_timestamp)
+    INTO checkpoint_time
+    FROM recovery_checkpoint
+    WHERE node_name = 'node_b';
+    
     -- Find committed transactions in Main's log that should have gone to Node B
-    -- but are missing from Node B's log
+    -- but are AFTER the last checkpoint
     SELECT 
         tm.transaction_id,
         tm.timestamp,
@@ -72,21 +101,13 @@ BEGIN
         tm.table_name
     FROM transaction_log tm
     WHERE tm.log_type = 'COMMIT'
-      AND tm.timestamp >= since_timestamp
+      AND tm.timestamp > checkpoint_time  -- Only transactions AFTER last checkpoint
       AND tm.operation_type IS NOT NULL
       -- Check if this record should be on Node B (startYear < 2025 or NULL)
       AND (
           (tm.operation_type = 'INSERT' AND (JSON_EXTRACT(tm.new_value, '$.startYear') < 2025 OR JSON_EXTRACT(tm.new_value, '$.startYear') IS NULL))
           OR (tm.operation_type = 'UPDATE' AND (JSON_EXTRACT(tm.new_value, '$.startYear') < 2025 OR JSON_EXTRACT(tm.new_value, '$.startYear') IS NULL))
           OR (tm.operation_type = 'DELETE' AND (JSON_EXTRACT(tm.old_value, '$.startYear') < 2025 OR JSON_EXTRACT(tm.old_value, '$.startYear') IS NULL))
-      )
-      -- Check if it's missing from Node B's log
-      AND NOT EXISTS (
-        SELECT 1 FROM transaction_log_node_b tl_b
-        WHERE tl_b.record_id = tm.record_id
-          AND tl_b.timestamp BETWEEN tm.timestamp - INTERVAL 5 SECOND
-                                 AND tm.timestamp + INTERVAL 5 SECOND
-          AND tl_b.log_type = 'COMMIT'
       )
     ORDER BY tm.timestamp ASC;
 END$$
@@ -245,7 +266,7 @@ END$$
 DELIMITER ;
 
 -- ============================================================================
--- 5. FULL RECOVERY FOR NODE A (Automated)
+-- 5. FULL RECOVERY FOR NODE A (Automated with Checkpoint)
 -- ============================================================================
 DROP PROCEDURE IF EXISTS full_recovery_node_a;
 
@@ -260,7 +281,22 @@ BEGIN
     DECLARE v_new_value TEXT;
     DECLARE v_old_value TEXT;
     DECLARE v_tconst VARCHAR(12);
+    DECLARE v_transaction_id VARCHAR(50);
+    DECLARE v_max_timestamp TIMESTAMP(6);
     DECLARE recovery_count INT DEFAULT 0;
+    DECLARE checkpoint_time TIMESTAMP(6);
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Rollback on any error
+        ROLLBACK;
+        SELECT '❌ Recovery failed - transaction rolled back' AS result;
+    END;
+    
+    -- Get last checkpoint
+    SELECT GREATEST(last_recovery_timestamp, since_timestamp)
+    INTO checkpoint_time
+    FROM recovery_checkpoint
+    WHERE node_name = 'node_a';
     
     -- Cursor for missing transactions
     DECLARE missing_cursor CURSOR FOR
@@ -268,30 +304,33 @@ BEGIN
             tm.operation_type,
             tm.new_value,
             tm.old_value,
-            tm.record_id
+            tm.record_id,
+            tm.transaction_id,
+            tm.timestamp
         FROM transaction_log tm
         WHERE tm.log_type = 'COMMIT'
-          AND tm.timestamp >= since_timestamp
+          AND tm.timestamp > checkpoint_time
           AND tm.operation_type IS NOT NULL
           AND (
               (tm.operation_type = 'INSERT' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
               OR (tm.operation_type = 'UPDATE' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
               OR (tm.operation_type = 'DELETE' AND JSON_EXTRACT(tm.old_value, '$.startYear') >= 2025)
           )
-          AND NOT EXISTS (
-            SELECT 1 FROM title_ft_node_a tl_a
-            WHERE tl_a.tconst = tm.record_id
-          )
         ORDER BY tm.timestamp ASC;
     
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
     
-    SELECT CONCAT('🔄 Starting recovery for Node A from timestamp: ', since_timestamp) AS status;
+    SELECT CONCAT('🔄 Starting recovery for Node A from checkpoint: ', checkpoint_time) AS status;
+    
+    -- START TRANSACTION - All replays in one atomic operation
+    START TRANSACTION;
+    
+    SET v_max_timestamp = checkpoint_time;
     
     OPEN missing_cursor;
     
     read_loop: LOOP
-        FETCH missing_cursor INTO v_operation, v_new_value, v_old_value, v_tconst;
+        FETCH missing_cursor INTO v_operation, v_new_value, v_old_value, v_tconst, v_transaction_id, v_max_timestamp;
         
         IF done THEN
             LEAVE read_loop;
@@ -305,13 +344,23 @@ BEGIN
     
     CLOSE missing_cursor;
     
-    SELECT CONCAT('✅ Recovery complete! Replayed ', recovery_count, ' transactions to Node A') AS result;
+    -- Update checkpoint to latest transaction timestamp
+    UPDATE recovery_checkpoint
+    SET last_recovery_timestamp = v_max_timestamp,
+        recovery_count = recovery_count + recovery_count,
+        last_transaction_id = v_transaction_id
+    WHERE node_name = 'node_a';
+    
+    -- COMMIT - All replays succeeded
+    COMMIT;
+    
+    SELECT CONCAT('✅ Recovery complete! Replayed ', recovery_count, ' transactions to Node A. Checkpoint saved at: ', v_max_timestamp) AS result;
 END$$
 
 DELIMITER ;
 
 -- ============================================================================
--- 6. FULL RECOVERY FOR NODE B (Automated)
+-- 6. FULL RECOVERY FOR NODE B (Automated with Checkpoint)
 -- ============================================================================
 DROP PROCEDURE IF EXISTS full_recovery_node_b;
 
@@ -326,37 +375,55 @@ BEGIN
     DECLARE v_new_value TEXT;
     DECLARE v_old_value TEXT;
     DECLARE v_tconst VARCHAR(12);
+    DECLARE v_transaction_id VARCHAR(50);
+    DECLARE v_max_timestamp TIMESTAMP(6);
     DECLARE recovery_count INT DEFAULT 0;
+    DECLARE checkpoint_time TIMESTAMP(6);
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Rollback on any error
+        ROLLBACK;
+        SELECT '❌ Recovery failed - transaction rolled back' AS result;
+    END;
+    
+    -- Get last checkpoint
+    SELECT GREATEST(last_recovery_timestamp, since_timestamp)
+    INTO checkpoint_time
+    FROM recovery_checkpoint
+    WHERE node_name = 'node_b';
     
     DECLARE missing_cursor CURSOR FOR
         SELECT 
             tm.operation_type,
             tm.new_value,
             tm.old_value,
-            tm.record_id
+            tm.record_id,
+            tm.transaction_id,
+            tm.timestamp
         FROM transaction_log tm
         WHERE tm.log_type = 'COMMIT'
-          AND tm.timestamp >= since_timestamp
+          AND tm.timestamp > checkpoint_time
           AND tm.operation_type IS NOT NULL
           AND (
               (tm.operation_type = 'INSERT' AND (JSON_EXTRACT(tm.new_value, '$.startYear') < 2025 OR JSON_EXTRACT(tm.new_value, '$.startYear') IS NULL))
               OR (tm.operation_type = 'UPDATE' AND (JSON_EXTRACT(tm.new_value, '$.startYear') < 2025 OR JSON_EXTRACT(tm.new_value, '$.startYear') IS NULL))
               OR (tm.operation_type = 'DELETE' AND (JSON_EXTRACT(tm.old_value, '$.startYear') < 2025 OR JSON_EXTRACT(tm.old_value, '$.startYear') IS NULL))
           )
-          AND NOT EXISTS (
-            SELECT 1 FROM title_ft_node_b tl_b
-            WHERE tl_b.tconst = tm.record_id
-          )
         ORDER BY tm.timestamp ASC;
     
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
     
-    SELECT CONCAT('🔄 Starting recovery for Node B from timestamp: ', since_timestamp) AS status;
+    SELECT CONCAT('🔄 Starting recovery for Node B from checkpoint: ', checkpoint_time) AS status;
+    
+    -- START TRANSACTION - All replays in one atomic operation
+    START TRANSACTION;
+    
+    SET v_max_timestamp = checkpoint_time;
     
     OPEN missing_cursor;
     
     read_loop: LOOP
-        FETCH missing_cursor INTO v_operation, v_new_value, v_old_value, v_tconst;
+        FETCH missing_cursor INTO v_operation, v_new_value, v_old_value, v_tconst, v_transaction_id, v_max_timestamp;
         
         IF done THEN
             LEAVE read_loop;
@@ -369,10 +436,20 @@ BEGIN
     
     CLOSE missing_cursor;
     
-    SELECT CONCAT('✅ Recovery complete! Replayed ', recovery_count, ' transactions to Node B') AS result;
+    -- Update checkpoint to latest transaction timestamp
+    UPDATE recovery_checkpoint
+    SET last_recovery_timestamp = v_max_timestamp,
+        recovery_count = recovery_count + recovery_count,
+        last_transaction_id = v_transaction_id
+    WHERE node_name = 'node_b';
+    
+    -- COMMIT - All replays succeeded
+    COMMIT;
+    
+    SELECT CONCAT('✅ Recovery complete! Replayed ', recovery_count, ' transactions to Node B. Checkpoint saved at: ', v_max_timestamp) AS result;
 END$$
 
 DELIMITER ;
 
-SELECT '=== Node Recovery Procedures Created ===' AS status;
-SELECT 'Use full_recovery_node_a() or full_recovery_node_b() to recover nodes from Main logs' AS info;
+SELECT '=== Node Recovery Procedures Created with Checkpoint System ===' AS status;
+SELECT 'Recovery runs ONLY on startup, all replays in one transaction, checkpoint prevents duplicates' AS info;

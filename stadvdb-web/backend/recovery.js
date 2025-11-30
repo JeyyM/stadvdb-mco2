@@ -1,10 +1,31 @@
 /**
  * AUTOMATIC RECOVERY MODULE
  * Handles automatic detection and recovery of missing transactions
- * Runs on server startup and periodically
+ * Runs ONLY on server startup with checkpoint system
  */
 
 const db = require('./db');
+
+// Recovery state tracking
+let isRecoveryInProgress = false;
+let recoveryPromise = null;
+
+/**
+ * Check if recovery is currently in progress
+ */
+function isRecovering() {
+  return isRecoveryInProgress;
+}
+
+/**
+ * Wait for recovery to complete before processing requests
+ */
+async function waitForRecovery() {
+  if (isRecoveryInProgress && recoveryPromise) {
+    console.log('⏳ Waiting for recovery to complete...');
+    await recoveryPromise;
+  }
+}
 
 /**
  * Check if this is the Main node based on environment variables
@@ -144,37 +165,54 @@ async function checkUncommittedTransactions() {
 /**
  * Run full recovery check on startup
  * This is called when the server starts
+ * BLOCKS all incoming requests until complete
  */
 async function runStartupRecovery() {
-  console.log('\n==========================================================');
-  console.log('🚀 STARTING AUTOMATIC RECOVERY CHECK');
-  console.log('==========================================================\n');
+  // Set recovery in progress flag
+  isRecoveryInProgress = true;
   
-  const nodeName = process.env.DB_NAME || 'unknown';
-  console.log(`📍 Current Node: ${nodeName}`);
-  console.log(`🔧 Recovery Mode: ${isMainNode() ? 'MAIN (can recover Node A/B)' : 'WORKER (recovery disabled)'}\n`);
+  // Create promise that tracks recovery completion
+  recoveryPromise = (async () => {
+    try {
+      console.log('\n==========================================================');
+      console.log('🚀 STARTING AUTOMATIC RECOVERY CHECK');
+      console.log('🔒 ALL REQUESTS BLOCKED UNTIL RECOVERY COMPLETES');
+      console.log('==========================================================\n');
+      
+      const nodeName = process.env.DB_NAME || 'unknown';
+      console.log(`📍 Current Node: ${nodeName}`);
+      console.log(`🔧 Recovery Mode: ${isMainNode() ? 'MAIN (can recover Node A/B)' : 'WORKER (recovery disabled)'}\n`);
 
-  // Check for uncommitted transactions first
-  await checkUncommittedTransactions();
+      // Check for uncommitted transactions first
+      await checkUncommittedTransactions();
+      
+      // Only Main node can perform recovery
+      if (isMainNode()) {
+        console.log('\n--- Recovering Node A ---');
+        await recoverNodeA();
+        
+        console.log('\n--- Recovering Node B ---');
+        await recoverNodeB();
+        
+        console.log('\n--- Recovering Main (not implemented) ---');
+        await recoverMainNode();
+      } else {
+        console.log('\n⏭️ This is not the Main node - automatic recovery disabled');
+        console.log('💡 Only Main node can perform automatic recovery for Node A/B');
+      }
+      
+      console.log('\n==========================================================');
+      console.log('✅ STARTUP RECOVERY CHECK COMPLETE');
+      console.log('🔓 SERVER NOW ACCEPTING REQUESTS');
+      console.log('==========================================================\n');
+    } finally {
+      // Always clear recovery flag
+      isRecoveryInProgress = false;
+      recoveryPromise = null;
+    }
+  })();
   
-  // Only Main node can perform recovery
-  if (isMainNode()) {
-    console.log('\n--- Recovering Node A ---');
-    await recoverNodeA();
-    
-    console.log('\n--- Recovering Node B ---');
-    await recoverNodeB();
-    
-    console.log('\n--- Recovering Main (not implemented) ---');
-    await recoverMainNode();
-  } else {
-    console.log('\n⏭️ This is not the Main node - automatic recovery disabled');
-    console.log('💡 Only Main node can perform automatic recovery for Node A/B');
-  }
-  
-  console.log('\n==========================================================');
-  console.log('✅ STARTUP RECOVERY CHECK COMPLETE');
-  console.log('==========================================================\n');
+  return recoveryPromise;
 }
 
 /**
@@ -224,5 +262,6 @@ module.exports = {
   recoverMainNode,
   checkUncommittedTransactions,
   runStartupRecovery,
-  startPeriodicRecovery
+  isRecovering,
+  waitForRecovery
 };
