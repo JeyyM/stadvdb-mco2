@@ -12,6 +12,17 @@ async function fetchWithFailover(url, options = {}) {
     if (response.ok) return response;
     throw new Error(`HTTP ${response.status}`);
   } catch (primaryError) {
+    // Check if we're already on Main - don't try to failover to ourselves
+    const currentApiUrl = process.env.REACT_APP_API_URL || '';
+    const isAlreadyOnMain = currentApiUrl.includes('stadvdb-mco2-main') || 
+                            currentApiUrl.includes(':60751') ||
+                            primaryUrl.includes('stadvdb-mco2-main');
+    
+    if (isAlreadyOnMain) {
+      console.error('Main backend request failed (no failover available):', primaryError.message);
+      throw primaryError;
+    }
+    
     console.warn(`Primary backend failed (${primaryUrl}), trying Main...`, primaryError.message);
     
     // Build fallback URL to Main backend
