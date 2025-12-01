@@ -1,23 +1,5 @@
 USE `stadvdb-mco2`;
 
--- Create transaction_logs table for recovery management
-DROP TABLE IF EXISTS transaction_logs;
-
-CREATE TABLE IF NOT EXISTS transaction_logs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    transaction_uuid VARCHAR(36) NOT NULL UNIQUE,
-    query_type ENUM('INSERT', 'UPDATE', 'DELETE') NOT NULL,
-    target_node VARCHAR(20) NOT NULL,
-    query_sql TEXT NOT NULL,
-    query_params JSON NOT NULL,
-    status ENUM('PENDING', 'COMMITTED', 'FAILED') NOT NULL DEFAULT 'PENDING',
-    error_message TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_target_status (target_node, status),
-    INDEX idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 DROP PROCEDURE IF EXISTS distributed_insert;
 DROP PROCEDURE IF EXISTS distributed_update;
 DROP PROCEDURE IF EXISTS distributed_delete;
@@ -42,12 +24,30 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
+    DECLARE current_transaction_id VARCHAR(36);
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        -- Log ABORT before rolling back
+        IF @current_transaction_id IS NOT NULL THEN
+            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
+        END IF;
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        
         ROLLBACK;
         RESIGNAL;
     END;
+
+    -- Initialize transaction logging
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
 
     START TRANSACTION;
 
@@ -99,7 +99,17 @@ BEGIN
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
     END IF;
 
+    -- Log COMMIT before committing transaction
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
+
     COMMIT;
+    
+    -- Clear session variables
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
 END$$
 
 DELIMITER ;
@@ -121,12 +131,30 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE updated_weightedRating DECIMAL(4,2);
+    DECLARE current_transaction_id VARCHAR(36);
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        -- Log ABORT before rolling back
+        IF @current_transaction_id IS NOT NULL THEN
+            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
+        END IF;
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        
         ROLLBACK;
         RESIGNAL;
     END;
+
+    -- Initialize transaction logging
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
 
     START TRANSACTION;
 
@@ -205,7 +233,17 @@ BEGIN
         END IF;
     END IF;
 
+    -- Log COMMIT before committing transaction
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
+
     COMMIT;
+    
+    -- Clear session variables
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
 END$$
 
 DELIMITER ;
@@ -217,11 +255,30 @@ CREATE PROCEDURE distributed_delete(
 )
 
 BEGIN
+    DECLARE current_transaction_id VARCHAR(36);
+    
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        -- Log ABORT before rolling back
+        IF @current_transaction_id IS NOT NULL THEN
+            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
+        END IF;
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        
         ROLLBACK;
         RESIGNAL;
     END;
+
+    -- Initialize transaction logging
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
 
     START TRANSACTION;
 
@@ -232,7 +289,17 @@ BEGIN
     DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
     DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
 
+    -- Log COMMIT before committing transaction
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
+
     COMMIT;
+    
+    -- Clear session variables
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
 END$$
 
 DELIMITER ;
@@ -256,18 +323,36 @@ BEGIN
     
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
+    DECLARE current_transaction_id VARCHAR(36);
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- Log ABORT before rolling back
+        IF @current_transaction_id IS NOT NULL THEN
+            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
+        END IF;
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
+        
+        ROLLBACK;
+        RESIGNAL;
+    END;
 
+    -- Validation AFTER all DECLARE statements
     IF num_new_reviews < 0 THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'num_new_reviews cannot be negative';
     END IF;
 
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
+    -- Initialize transaction logging
+    SET current_transaction_id = UUID();
+    SET @current_transaction_id = current_transaction_id;
+    SET @current_log_sequence = 0;
 
     START TRANSACTION;
 
@@ -340,7 +425,17 @@ BEGIN
         WHERE tconst = new_tconst;
     END IF;
 
+    -- Log COMMIT before committing transaction
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
+
     COMMIT;
+    
+    -- Clear session variables
+    SET @current_transaction_id = NULL;
+    SET @current_log_sequence = NULL;
 END$$
 
 DELIMITER ;
