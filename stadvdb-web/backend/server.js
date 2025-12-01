@@ -68,8 +68,8 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 
     // --- RECOVERY LOGIC START ---
     // Determine which node this SHOULD go to based on fragmentation rules
-    // 2024 = NODE_B, 2025 = NODE_A
-    const targetNode = (startYear === 2024) ? 'NODE_B' : (startYear === 2025) ? 'NODE_A' : 'MAIN';
+    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
+    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
 
@@ -119,8 +119,8 @@ app.post('/api/titles/distributed-update', async (req, res) => {
     // --- RECOVERY LOGIC START ---
     // For updates, the target node might change if startYear changes
     // but primarily we track where the data *ends up*
-    // 2024 = NODE_B, 2025 = NODE_A
-    const targetNode = (startYear === 2024) ? 'NODE_B' : (startYear === 2025) ? 'NODE_A' : 'MAIN';
+    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
+    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
 
