@@ -19,15 +19,11 @@ CREATE PROCEDURE distributed_insert(
     IN new_startYear SMALLINT UNSIGNED
 )
 BEGIN
-    -- This does already update the node
-    CALL `stadvdb-mco2`.distributed_insert(
-        new_tconst,
-        new_primaryTitle,
-        new_runtimeMinutes,
-        new_averageRating,
-        new_numVotes,
-        new_startYear
-    );
+    INSERT INTO `stadvdb-mco2-a`.title_ft
+    (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, weightedRating)
+    VALUES 
+    (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, new_averageRating);
+    -- the sync to Main will be handled in the Node js Application Layer.
 END$$
 
 CREATE PROCEDURE distributed_update(
@@ -39,21 +35,20 @@ CREATE PROCEDURE distributed_update(
     IN new_startYear SMALLINT UNSIGNED
 )
 BEGIN
-    CALL `stadvdb-mco2`.distributed_update(
-        new_tconst,
-        new_primaryTitle,
-        new_runtimeMinutes,
-        new_averageRating,
-        new_numVotes,
-        new_startYear
-    );
+    UPDATE title_ft
+    SET primaryTitle = new_primaryTitle,
+        runtimeMinutes = new_runtimeMinutes,
+        averageRating = new_averageRating,
+        numVotes = new_numVotes,
+        startYear = new_startYear
+    WHERE tconst = new_tconst;
 END$$
 
 CREATE PROCEDURE distributed_delete(
-    IN new_tconst VARCHAR(12)
+    IN target_tconst VARCHAR(12)
 )
 BEGIN
-    CALL `stadvdb-mco2`.distributed_delete(new_tconst);
+    DELETE FROM title_ft WHERE tconst = target_tconst;
 END$$
 
 

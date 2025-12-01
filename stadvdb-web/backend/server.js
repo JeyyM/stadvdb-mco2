@@ -54,29 +54,49 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     }
 
     // --- RECOVERY LOGIC START ---
-    // Determine which node this SHOULD go to based on fragmentation rules
-    // < 2010 = NODE_B, >= 2010 = NODE_A
-    const targetNode = (startYear < 2010) ? 'NODE_B' : 'NODE_A';
+    const currentNode = process.env.DB_NAME; 
+    const isMainNode = currentNode === 'stadvdb-mco2';
+
+    let firstWriteTarget = 'LOCAL';
+    if (isMainNode) {
+        firstWriteTarget = (startYear < 2010) ? 'NODE_B' : 'NODE_A';
+    }
+
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
 
-    const transactionId = await RecoveryManager.logTransaction('INSERT', targetNode, sql, params);
+    const transactionId = await RecoveryManager.logTransaction('INSERT', firstWriteTarget, sql, params);
 
     try {
-      const [results] = await db.query(sql, params);
+        const [results] = await db.query(sql, params);
 
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-      
-      res.json({ success: true, data: results });
+        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
+
+        if (!isMainNode) {
+            console.log(`[Sync] Local write successful on ${currentNode}. Attempting to sync to MAIN...`);
+            
+            const syncSql = 'CALL `stadvdb-mco2`.distributed_insert(?, ?, ?, ?, ?, ?)';
+            
+            const syncLogId = await RecoveryManager.logTransaction('INSERT', 'MAIN', syncSql, params);
+
+            try {
+                await db.query(syncSql, params);
+                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'COMMITTED');
+                console.log(`[Sync] Successfully synced to MAIN.`);
+            } catch (mainError) {
+                console.error(`[Sync] Failed to sync to MAIN: ${mainError.message}`);
+                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'FAILED', mainError.message);
+            }
+        }
+
+        res.json({ success: true, data: results });
 
     } catch (dbError) {
-      console.error(`Transaction ${transactionId} failed. Logging error.`);
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      
-      throw dbError;
+        console.error(`Transaction ${transactionId} failed. Logging error.`);
+        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
+        throw dbError; 
     }
     // --- RECOVERY LOGIC END ---
-
   } catch (error) {
     console.error('Error in distributed_insert:', error);
     res.status(500).json({
@@ -90,48 +110,59 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 // Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
   try {
-    const {
-      tconst,
-      primaryTitle,
-      runtimeMinutes,
-      averageRating,
-      numVotes,
-      startYear
-    } = req.body;
+    const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
 
-    if (!tconst) {
-      return res.status(400).json({ success: false, message: 'tconst is required' });
+    if (!tconst) return res.status(400).json({ success: false, message: 'tconst is required' });
+
+    // --- RECOVERY LOGIC START (YAZAN) ---
+    const currentNode = process.env.DB_NAME; 
+    const isMainNode = currentNode === 'stadvdb-mco2';
+
+    // 1. Determine Local Target
+    // If Main, we calculate based on year. If Node A/B, we write to LOCAL.
+    let firstWriteTarget = 'LOCAL';
+    if (isMainNode) {
+        firstWriteTarget = (startYear < 2010) ? 'NODE_B' : 'NODE_A';
     }
 
-    // --- RECOVERY LOGIC START ---
-    // For updates, the target node might change if startYear changes
-    // but primarily we track where the data *ends up*
-    const targetNode = (startYear < 2010) ? 'NODE_B' : 'NODE_A';
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
 
-    const transactionId = await RecoveryManager.logTransaction('UPDATE', targetNode, sql, params);
+    // 2. Log Primary Transaction
+    const transactionId = await RecoveryManager.logTransaction('UPDATE', firstWriteTarget, sql, params);
 
     try {
-      const [results] = await db.query(sql, params);
-      
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-      
-      res.json({ success: true, data: results });
+        // 3. Execute Primary (Local) Write
+        const [results] = await db.query(sql, params);
+        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
+
+        // 4. SYNC UPWARD (Node A/B -> Main)
+        if (!isMainNode) {
+            console.log(`[Sync-Update] Local update done on ${currentNode}. Syncing to MAIN...`);
+            const syncSql = 'CALL `stadvdb-mco2`.distributed_update(?, ?, ?, ?, ?, ?)';
+            
+            const syncLogId = await RecoveryManager.logTransaction('UPDATE', 'MAIN', syncSql, params);
+
+            try {
+                await db.query(syncSql, params);
+                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'COMMITTED');
+            } catch (mainError) {
+                console.error(`[Sync-Update] Failed to sync to MAIN: ${mainError.message}`);
+                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'FAILED', mainError.message);
+            }
+        }
+
+        res.json({ success: true, data: results });
 
     } catch (dbError) {
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      throw dbError;
+        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
+        throw dbError;
     }
     // --- RECOVERY LOGIC END ---
 
   } catch (error) {
     console.error('Error in distributed_update:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_update',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error', error: error.message });
   }
 });
 
@@ -139,21 +170,43 @@ app.post('/api/titles/distributed-update', async (req, res) => {
 app.post('/api/titles/distributed-delete', async (req, res) => {
   try {
     const { tconst } = req.body;
-    if (!tconst) {
-      return res.status(400).json({ success: false, message: 'tconst is required' });
-    }
+    if (!tconst) return res.status(400).json({ success: false, message: 'tconst is required' });
 
-    // --- RECOVERY LOGIC START ---
-    // Deletes broadcast to all nodes, so we log it as affecting MAIN (which handles the broadcast)
+    // --- RECOVERY LOGIC START (YAZAN) ---
+    const currentNode = process.env.DB_NAME; 
+    const isMainNode = currentNode === 'stadvdb-mco2';
+
+    // 1. Define SQL
     const sql = 'CALL distributed_delete(?)';
     const params = [tconst];
 
-    const transactionId = await RecoveryManager.logTransaction('DELETE', 'MAIN', sql, params);
+    // 2. Log Primary
+    // For deletes, Main broadcasts to everyone. Nodes just delete locally.
+    const transactionId = await RecoveryManager.logTransaction('DELETE', isMainNode ? 'MAIN' : 'LOCAL', sql, params);
 
     try {
+      // 3. Execute Primary (Local) Write
       const [results] = await db.query(sql, params);
       if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
+
+      // 4. SYNC UPWARD (Node A/B -> Main)
+      if (!isMainNode) {
+          console.log(`[Sync-Delete] Local delete done on ${currentNode}. Syncing to MAIN...`);
+          const syncSql = 'CALL `stadvdb-mco2`.distributed_delete(?)';
+          
+          const syncLogId = await RecoveryManager.logTransaction('DELETE', 'MAIN', syncSql, params);
+
+          try {
+              await db.query(syncSql, params);
+              if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'COMMITTED');
+          } catch (mainError) {
+              console.error(`[Sync-Delete] Failed to sync to MAIN: ${mainError.message}`);
+              if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'FAILED', mainError.message);
+          }
+      }
+
       res.json({ success: true, data: results });
+
     } catch (dbError) {
       if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
       throw dbError;
@@ -162,11 +215,7 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
 
   } catch (error) {
     console.error('Error in distributed_delete:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_delete',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error', error: error.message });
   }
 });
 
