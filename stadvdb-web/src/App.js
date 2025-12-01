@@ -154,6 +154,12 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Update page title based on connected node
+  useEffect(() => {
+    const nodeName = getNodeName();
+    document.title = `Distributed IMDB - ${nodeName}`;
+  }, []);
+
   const fetchAggregations = () => {
     setLoadingAggregations(true);
     setAggError(null);

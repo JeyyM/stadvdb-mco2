@@ -1,0 +1,9 @@
+# Database Configuration
+DB_HOST=ccscloud.dlsu.edu.ph
+DB_USER=g18
+DB_PASSWORD=fuckingpassword
+DB_NAME=stadvdb-mco2
+DB_PORT=60751
+
+# Server Configuration
+PORT=60753
