@@ -3,7 +3,7 @@ import './App.css';
 
 function App() {
   const [showEditPopup, setShowEditPopup] = useState(false);
-  // Track if popup is open for disabling buttons 
+  // Track if popup is open for disabling buttons  
   const popupActive = showEditPopup;
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
