@@ -52,7 +52,14 @@ function App() {
           setShowEditPopup(false);
           setEditRow(null);
           setEditSuccess(null);
-          handleSearch({ preventDefault: () => {} }); // Refresh results
+          // Refresh all data
+          if (hasSearched) {
+            handleSearch({ preventDefault: () => {} });
+          }
+          if (hasSelected) {
+            handleSelect({ preventDefault: () => {} });
+          }
+          fetchAggregations();
         }, 800);
       } else {
         setEditError(data.message || 'Delete failed');
@@ -127,7 +134,14 @@ function App() {
           setShowEditPopup(false);
           setEditRow(null);
           setEditSuccess(null);
-          handleSearch({ preventDefault: () => {} }); // Refresh results
+          // Refresh all data
+          if (hasSearched) {
+            handleSearch({ preventDefault: () => {} });
+          }
+          if (hasSelected) {
+            handleSelect({ preventDefault: () => {} });
+          }
+          fetchAggregations();
         }, 1000);
       } else {
         setEditError(data.message || (editRow ? 'Update failed' : 'Insert failed'));
@@ -675,6 +689,7 @@ function App() {
                 onChange={(e) => setSelectColumn(e.target.value)}
               >
                 <option value="averageRating">Average Rating</option>
+                <option value="weightedRating">Weighted Rating</option>
                 <option value="numVotes">Vote Count</option>
                 <option value="startYear">Release Year</option>
                 <option value="primaryTitle">Title </option>
