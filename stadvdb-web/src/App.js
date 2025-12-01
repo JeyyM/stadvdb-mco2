@@ -94,7 +94,7 @@ function App() {
     try {
       let url, body;
       if (editRow) {
-        url = 'http://localhost:5000/api/titles/distributed-update';
+        url = `${process.env.REACT_APP_API_URL}/api/titles/distributed-update`;
         body = JSON.stringify({
           tconst: editForm.tconst,
           primaryTitle: editForm.primaryTitle,
@@ -154,6 +154,12 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Update page title based on connected node
+  useEffect(() => {
+    const nodeName = getNodeName();
+    document.title = `Distributed IMDB - ${nodeName}`;
+  }, []);
+
   const fetchAggregations = () => {
     setLoadingAggregations(true);
     setAggError(null);
@@ -172,6 +178,18 @@ function App() {
 
   const handleSearch = async (e) => {
     e.preventDefault();
+    
+    // Validation checks
+    if (!searchTerm || searchTerm.trim() === '') {
+      setError('Please enter a search term');
+      return;
+    }
+    
+    if (!limit || limit < 1 || limit > 100) {
+      setError('Please enter a valid limit (1-100)');
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setHasSearched(true);
@@ -211,6 +229,23 @@ function App() {
 
   const handleSelect = async (e) => {
     e.preventDefault();
+    
+    // Validation checks
+    if (!selectColumn || selectColumn.trim() === '') {
+      setSelectError('Please select a column');
+      return;
+    }
+    
+    if (!orderDirection || (orderDirection !== 'ASC' && orderDirection !== 'DESC')) {
+      setSelectError('Please select a valid order direction');
+      return;
+    }
+    
+    if (!selectLimit || selectLimit < 1 || selectLimit > 100) {
+      setSelectError('Please enter a valid limit (1-100)');
+      return;
+    }
+    
     setSelectLoading(true);
     setSelectError(null);
     setHasSelected(true);
@@ -235,12 +270,21 @@ function App() {
     }
   };
 
+  // Determine which node we're connected to based on the API URL port
+  const getNodeName = () => {
+    const apiUrl = process.env.REACT_APP_API_URL || '';
+    if (apiUrl.includes(':60751')) return 'Main Node';
+    if (apiUrl.includes(':60752')) return 'Node A';
+    if (apiUrl.includes(':60753')) return 'Node B';
+    return 'Unknown Node';
+  };
+
   return (
     <div className="App app-root">
       <header className="app-header">
         <div className="app-header-inner">
           <div>
-            <h1 className="app-title">Distributed IMDB Database</h1>
+            <h1 className="app-title">Distributed IMDB Database ({getNodeName()})</h1>
           </div>
         </div>
       </header>

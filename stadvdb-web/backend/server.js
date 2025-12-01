@@ -7,8 +7,21 @@ const RecoveryManager = require('./recoveryManager');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors());
+/// Middleware
+// Updated CORS to allow Vercel deployments
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:60751',
+    'http://localhost:60752',
+    'http://localhost:60753',
+    /\.vercel\.app$/, // Allow all Vercel deployments
+    /\.onrender\.com$/ // Allow Render deployments
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ============================================================================
@@ -19,18 +32,13 @@ app.use(express.json());
 // Usage: POST /api/recovery/sync with body { "node": "NODE_A" }
 app.post('/api/recovery/sync', async (req, res) => {
   try {
-    const { node } = req.body; // Expects 'NODE_A' or 'NODE_B'
-    
-    if (!node) {
-      return res.status(400).json({ success: false, message: 'Node name required (NODE_A or NODE_B)' });
-    }
-
+    const { node } = req.body;
+    if (!node) return res.status(400).json({ success: false, message: 'Node required' });
     console.log(`Manual recovery triggered for ${node}`);
     await RecoveryManager.recoverFailedTransactions(node);
-    
     res.json({ success: true, message: `Recovery process finished for ${node}` });
   } catch (error) {
-    console.error('Error triggering recovery:', error);
+    console.error('Recovery failed:', error);
     res.status(500).json({ success: false, message: 'Recovery failed', error: error.message });
   }
 });
@@ -39,71 +47,49 @@ app.post('/api/recovery/sync', async (req, res) => {
 // Distributed insert system
 app.post('/api/titles/distributed-insert', async (req, res) => {
   try {
-    const {
-      tconst,
-      primaryTitle,
-      runtimeMinutes,
-      averageRating,
-      numVotes,
-      startYear
-    } = req.body;
+    const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
+    if (!tconst || !primaryTitle) return res.status(400).json({ success: false, message: 'Required fields missing' });
 
-    // Validate required fields
-    if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
-      return res.status(400).json({ success: false, message: 'All fields are required' });
-    }
-
-    // --- RECOVERY LOGIC START ---
     const currentNode = process.env.DB_NAME; 
     const isMainNode = currentNode === 'stadvdb-mco2';
-
-    let firstWriteTarget = 'LOCAL';
-    if (isMainNode) {
-        firstWriteTarget = (startYear < 2010) ? 'NODE_B' : 'NODE_A';
-    }
-
+    
+    let target = isMainNode ? ((startYear < 2010) ? 'NODE_B' : 'NODE_A') : 'MAIN';
+    
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
-
-    const transactionId = await RecoveryManager.logTransaction('INSERT', firstWriteTarget, sql, params);
+    const transactionId = await RecoveryManager.logTransaction('INSERT', target, sql, params);
 
     try {
-        const [results] = await db.query(sql, params);
-
+        await db.query(sql, params);
         if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
+        res.json({ success: true, message: 'Inserted via Federation' });
 
+    } catch (fedError) {
+        console.error(`[Federation Failed] Switching to Local Fallback: ${fedError.message}`);
+        
         if (!isMainNode) {
-            console.log(`[Sync] Local write successful on ${currentNode}. Attempting to sync to MAIN...`);
-            
-            const syncSql = 'CALL `stadvdb-mco2`.distributed_insert(?, ?, ?, ?, ?, ?)';
-            
-            const syncLogId = await RecoveryManager.logTransaction('INSERT', 'MAIN', syncSql, params);
-
             try {
-                await db.query(syncSql, params);
-                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'COMMITTED');
-                console.log(`[Sync] Successfully synced to MAIN.`);
-            } catch (mainError) {
-                console.error(`[Sync] Failed to sync to MAIN: ${mainError.message}`);
-                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'FAILED', mainError.message);
+                const fallbackSql = `
+                    INSERT IGNORE INTO title_ft 
+                    (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, weightedRating) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `;
+                await db.query(fallbackSql, [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, averageRating]);
+                
+                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', fedError.message);
+                
+                res.json({ success: true, message: 'Main Node down. Saved Locally.', warning: 'Offline Mode' });
+            } catch (localError) {
+                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', localError.message);
+                throw localError;
             }
+        } else {
+            throw fedError;
         }
-
-        res.json({ success: true, data: results });
-
-    } catch (dbError) {
-        console.error(`Transaction ${transactionId} failed. Logging error.`);
-        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-        throw dbError; 
     }
-    // --- RECOVERY LOGIC END ---
   } catch (error) {
-    console.error('Error in distributed_insert:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_insert',
-      error: error.message
-    });
+    console.error('Insert Error:', error);
+    res.status(500).json({ success: false, message: 'Insert Error', error: error.message });
   }
 });
 
@@ -111,58 +97,43 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 app.post('/api/titles/distributed-update', async (req, res) => {
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
+    if (!tconst) return res.status(400).json({ success: false, message: 'tconst required' });
 
-    if (!tconst) return res.status(400).json({ success: false, message: 'tconst is required' });
-
-    // --- RECOVERY LOGIC START (YAZAN) ---
     const currentNode = process.env.DB_NAME; 
     const isMainNode = currentNode === 'stadvdb-mco2';
-
-    // 1. Determine Local Target
-    // If Main, we calculate based on year. If Node A/B, we write to LOCAL.
-    let firstWriteTarget = 'LOCAL';
-    if (isMainNode) {
-        firstWriteTarget = (startYear < 2010) ? 'NODE_B' : 'NODE_A';
-    }
-
+    
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
-
-    // 2. Log Primary Transaction
-    const transactionId = await RecoveryManager.logTransaction('UPDATE', firstWriteTarget, sql, params);
+    const transactionId = await RecoveryManager.logTransaction('UPDATE', isMainNode ? 'NODES' : 'MAIN', sql, params);
 
     try {
-        // 3. Execute Primary (Local) Write
-        const [results] = await db.query(sql, params);
+        await db.query(sql, params);
         if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-
-        // 4. SYNC UPWARD (Node A/B -> Main)
+        res.json({ success: true, message: 'Updated via Federation' });
+    } catch (fedError) {
+        console.error(`[Federation Failed] Switching to Local Fallback: ${fedError.message}`);
         if (!isMainNode) {
-            console.log(`[Sync-Update] Local update done on ${currentNode}. Syncing to MAIN...`);
-            const syncSql = 'CALL `stadvdb-mco2`.distributed_update(?, ?, ?, ?, ?, ?)';
-            
-            const syncLogId = await RecoveryManager.logTransaction('UPDATE', 'MAIN', syncSql, params);
-
             try {
-                await db.query(syncSql, params);
-                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'COMMITTED');
-            } catch (mainError) {
-                console.error(`[Sync-Update] Failed to sync to MAIN: ${mainError.message}`);
-                if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'FAILED', mainError.message);
+                const fallbackSql = `
+                    UPDATE title_ft SET 
+                    primaryTitle=?, runtimeMinutes=?, averageRating=?, numVotes=?, startYear=?
+                    WHERE tconst=?
+                `;
+                await db.query(fallbackSql, [primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, tconst]);
+                
+                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', fedError.message);
+                res.json({ success: true, message: 'Main Node down. Updated Locally.', warning: 'Offline Mode' });
+            } catch (localError) {
+                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', localError.message);
+                throw localError;
             }
+        } else {
+            throw fedError;
         }
-
-        res.json({ success: true, data: results });
-
-    } catch (dbError) {
-        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-        throw dbError;
     }
-    // --- RECOVERY LOGIC END ---
-
   } catch (error) {
-    console.error('Error in distributed_update:', error);
-    res.status(500).json({ success: false, message: 'Error', error: error.message });
+    console.error('Update Error:', error);
+    res.status(500).json({ success: false, message: 'Update Error', error: error.message });
   }
 });
 
@@ -170,74 +141,52 @@ app.post('/api/titles/distributed-update', async (req, res) => {
 app.post('/api/titles/distributed-delete', async (req, res) => {
   try {
     const { tconst } = req.body;
-    if (!tconst) return res.status(400).json({ success: false, message: 'tconst is required' });
+    if (!tconst) return res.status(400).json({ success: false, message: 'tconst required' });
 
-    // --- RECOVERY LOGIC START (YAZAN) ---
     const currentNode = process.env.DB_NAME; 
     const isMainNode = currentNode === 'stadvdb-mco2';
 
-    // 1. Define SQL
     const sql = 'CALL distributed_delete(?)';
     const params = [tconst];
-
-    // 2. Log Primary
-    // For deletes, Main broadcasts to everyone. Nodes just delete locally.
-    const transactionId = await RecoveryManager.logTransaction('DELETE', isMainNode ? 'MAIN' : 'LOCAL', sql, params);
+    const transactionId = await RecoveryManager.logTransaction('DELETE', isMainNode ? 'NODES' : 'MAIN', sql, params);
 
     try {
-      // 3. Execute Primary (Local) Write
-      const [results] = await db.query(sql, params);
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-
-      // 4. SYNC UPWARD (Node A/B -> Main)
-      if (!isMainNode) {
-          console.log(`[Sync-Delete] Local delete done on ${currentNode}. Syncing to MAIN...`);
-          const syncSql = 'CALL `stadvdb-mco2`.distributed_delete(?)';
-          
-          const syncLogId = await RecoveryManager.logTransaction('DELETE', 'MAIN', syncSql, params);
-
-          try {
-              await db.query(syncSql, params);
-              if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'COMMITTED');
-          } catch (mainError) {
-              console.error(`[Sync-Delete] Failed to sync to MAIN: ${mainError.message}`);
-              if (syncLogId) await RecoveryManager.updateLogStatus(syncLogId, 'FAILED', mainError.message);
-          }
-      }
-
-      res.json({ success: true, data: results });
-
-    } catch (dbError) {
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      throw dbError;
+        await db.query(sql, params);
+        if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
+        res.json({ success: true, message: 'Deleted via Federation' });
+    } catch (fedError) {
+        console.error(`[Federation Failed] Switching to Local Fallback: ${fedError.message}`);
+        if (!isMainNode) {
+            try {
+                const fallbackSql = 'DELETE FROM title_ft WHERE tconst = ?';
+                await db.query(fallbackSql, params);
+                
+                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', fedError.message);
+                res.json({ success: true, message: 'Main Node down. Deleted Locally.', warning: 'Offline Mode' });
+            } catch (localError) {
+                if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', localError.message);
+                throw localError;
+            }
+        } else {
+            throw fedError;
+        }
     }
-    // --- RECOVERY LOGIC END ---
-
   } catch (error) {
-    console.error('Error in distributed_delete:', error);
-    res.status(500).json({ success: false, message: 'Error', error: error.message });
+    console.error('Delete Error:', error);
+    res.status(500).json({ success: false, message: 'Delete Error', error: error.message });
   }
 });
 
 // 3. READ-ONLY ROUTES (No Logging Needed)
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
-  try {
-    const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
-    const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
-    res.json({
-      success: true,
-      count: results[0]?.length || 0,
-      data: results[0] || []
-    });
-  } catch (error) {
-    console.error('Error in distributed_select:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_select',
-      error: error.message
-    });
-  }
+    try {
+        const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
+        const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
+        res.json({ success: true, count: results[0]?.length || 0, data: results[0] || [] });
+    } catch (error) {
+        res.status(500).json({ message: 'Error in select', error: error.message });
+    }
 });
 
 // Distributed search system
@@ -290,65 +239,21 @@ app.get('/api/aggregation', async (req, res) => {
 // Advanced Search
 app.get('/api/titles/search-advanced', async (req, res) => {
   try {
-    const {
-      title_query,
-      min_rating,
-      max_rating,
-      min_votes,
-      result_limit = 10
-    } = req.query;
-
+    const { title_query, min_rating, max_rating, min_votes, result_limit = 10 } = req.query;
     const query = `
-      SELECT 
-        tf.tconst,
-        tf.primaryTitle AS title,
-        tf.averageRating,
-        tf.numVotes,
-        tb.genres
+      SELECT tf.tconst, tf.primaryTitle AS title, tf.averageRating, tf.numVotes
       FROM title_ft AS tf
-      LEFT JOIN title_basics AS tb ON tf.tconst = tb.tconst
-      WHERE 
-        (? IS NULL OR tf.primaryTitle LIKE CONCAT('%', ?, '%'))
-        AND (? IS NULL OR tf.averageRating >= ?)
-        AND (? IS NULL OR tf.averageRating <= ?)
-        AND (? IS NULL OR tf.numVotes >= ?)
-      ORDER BY 
-        tf.numVotes DESC
-      LIMIT ?
+      WHERE (? IS NULL OR tf.primaryTitle LIKE CONCAT('%', ?, '%'))
+      AND (? IS NULL OR tf.averageRating >= ?)
+      AND (? IS NULL OR tf.averageRating <= ?)
+      AND (? IS NULL OR tf.numVotes >= ?)
+      ORDER BY tf.numVotes DESC LIMIT ?
     `;
-
-    const params = [
-      title_query || null,
-      title_query || null,
-      min_rating || null,
-      min_rating || null,
-      max_rating || null,
-      max_rating || null,
-      min_votes || null,
-      min_votes || null,
-      parseInt(result_limit)
-    ];
-
+    const params = [title_query || null, title_query || null, min_rating || null, min_rating || null, max_rating || null, max_rating || null, min_votes || null, min_votes || null, parseInt(result_limit)];
     const [results] = await db.query(query, params);
-    res.json({
-      success: true,
-      count: results.length,
-      filters: {
-        title_query,
-        min_rating,
-        max_rating,
-        min_votes,
-        result_limit
-      },
-      data: results
-    });
+    res.json({ success: true, count: results.length, data: results });
   } catch (error) {
-    console.error('Error searching titles:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error searching titles',
-      error: error.message
-    });
+    res.status(500).json({ message: 'Error searching titles', error: error.message });
   }
 });
 
