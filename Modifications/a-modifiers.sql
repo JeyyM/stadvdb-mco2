@@ -61,8 +61,8 @@ BEGIN
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
        new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
 
-    -- Insert into local node if this record belongs here (>= 2024)
-    IF new_startYear IS NOT NULL AND new_startYear >= 2024 THEN
+    -- Insert into local node if this record belongs here (= 2025)
+    IF new_startYear IS NOT NULL AND new_startYear = 2025 THEN
         INSERT INTO title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
@@ -124,15 +124,15 @@ BEGIN
     WHERE tconst = new_tconst;
 
     -- Handle local node updates based on startYear changes
-    IF (old_startYear IS NULL OR old_startYear < 2024) AND (new_startYear >= 2024) THEN
-        -- Moving from Node B to Node A - insert locally
+    IF (old_startYear IS NULL OR old_startYear != 2025) AND (new_startYear = 2025) THEN
+        -- Moving to Node A - insert locally
         INSERT INTO title_ft
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-    ELSEIF (old_startYear >= 2024) AND (new_startYear IS NULL OR new_startYear < 2024) THEN
-        -- Moving from Node A to Node B - delete locally
+    ELSEIF (old_startYear = 2025) AND (new_startYear IS NULL OR new_startYear != 2025) THEN
+        -- Moving from Node A - delete locally
         DELETE FROM title_ft WHERE tconst = new_tconst;
-    ELSEIF new_startYear IS NOT NULL AND new_startYear >= 2024 THEN
+    ELSEIF new_startYear IS NOT NULL AND new_startYear = 2025 THEN
         -- Staying in Node A - update locally
         UPDATE title_ft
         SET primaryTitle = new_primaryTitle,
