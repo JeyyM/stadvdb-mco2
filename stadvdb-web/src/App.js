@@ -94,7 +94,7 @@ function App() {
     try {
       let url, body;
       if (editRow) {
-        url = 'http://localhost:5000/api/titles/distributed-update';
+        url = `${process.env.REACT_APP_API_URL}/api/titles/distributed-update`;
         body = JSON.stringify({
           tconst: editForm.tconst,
           primaryTitle: editForm.primaryTitle,
