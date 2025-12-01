@@ -85,6 +85,9 @@ BEGIN
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
        new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
 
+    -- Set flag to prevent triggers on federated nodes from logging
+    SET @federated_operation = 1;
+
     -- Use federated tables to insert into remote nodes
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
     IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
@@ -96,6 +99,9 @@ BEGIN
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
     END IF;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
 
     -- Log COMMIT before committing transaction
     SET @current_log_sequence = @current_log_sequence + 1;
@@ -194,6 +200,9 @@ BEGIN
         weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
 
+    -- Set flag to prevent triggers on federated nodes from logging
+    SET @federated_operation = 1;
+
     -- Check if you need to move to a new node (use federated tables)
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
     IF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
@@ -230,6 +239,9 @@ BEGIN
             WHERE tconst = new_tconst;
         END IF;
     END IF;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
 
     -- Log COMMIT before committing transaction
     SET @current_log_sequence = @current_log_sequence + 1;
@@ -283,9 +295,15 @@ BEGIN
     DELETE FROM `stadvdb-mco2`.title_ft
     WHERE tconst = new_tconst;
 
+    -- Set flag to prevent triggers on federated nodes from logging
+    SET @federated_operation = 1;
+
     -- Use federated tables to delete from remote nodes
     DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
     DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
 
     -- Log COMMIT before committing transaction
     SET @current_log_sequence = @current_log_sequence + 1;
