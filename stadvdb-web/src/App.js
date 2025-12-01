@@ -172,6 +172,18 @@ function App() {
 
   const handleSearch = async (e) => {
     e.preventDefault();
+    
+    // Validation checks
+    if (!searchTerm || searchTerm.trim() === '') {
+      setError('Please enter a search term');
+      return;
+    }
+    
+    if (!limit || limit < 1 || limit > 100) {
+      setError('Please enter a valid limit (1-100)');
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setHasSearched(true);
@@ -211,6 +223,23 @@ function App() {
 
   const handleSelect = async (e) => {
     e.preventDefault();
+    
+    // Validation checks
+    if (!selectColumn || selectColumn.trim() === '') {
+      setSelectError('Please select a column');
+      return;
+    }
+    
+    if (!orderDirection || (orderDirection !== 'ASC' && orderDirection !== 'DESC')) {
+      setSelectError('Please select a valid order direction');
+      return;
+    }
+    
+    if (!selectLimit || selectLimit < 1 || selectLimit > 100) {
+      setSelectError('Please enter a valid limit (1-100)');
+      return;
+    }
+    
     setSelectLoading(true);
     setSelectError(null);
     setHasSelected(true);
