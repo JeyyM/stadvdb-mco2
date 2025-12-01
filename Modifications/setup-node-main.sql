@@ -4,11 +4,12 @@
 
 USE `stadvdb-mco2`;
 
--- Note: title_ft table already exists with complete database
+-- Note: title_ft table already exists with complete database (only years 2024-2025)
 -- This script adds federated access to slave node fragments
 -- Using INTERNAL IP addresses for inter-VM communication
 
--- Create federated table to access Node A's fragment (startYear >= 2010)
+-- Create federated table to access Node A's fragment
+-- Initial data: startYear = 2025, but modifiers allow >= 2025
 -- Node A is on VM 60052 with internal IP 10.2.14.52
 DROP TABLE IF EXISTS `title_ft_node_a`;
 
@@ -23,7 +24,8 @@ CREATE TABLE `title_ft_node_a` (
 ) ENGINE=FEDERATED
 CONNECTION='mysql://g18:fuckingpassword@10.2.14.52:3306/stadvdb-mco2-a/title_ft';
 
--- Create federated table to access Node B's fragment (startYear < 2010)
+-- Create federated table to access Node B's fragment
+-- Initial data: startYear = 2024, but modifiers allow < 2025 (including NULL)
 -- Node B is on VM 60053 with internal IP 10.2.14.53
 DROP TABLE IF EXISTS `title_ft_node_b`;
 
