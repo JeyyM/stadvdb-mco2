@@ -1,5 +1,5 @@
 USE `stadvdb-mco2-a`;
---
+
 DROP PROCEDURE IF EXISTS distributed_insert;
 DROP PROCEDURE IF EXISTS distributed_update;
 DROP PROCEDURE IF EXISTS distributed_delete;
