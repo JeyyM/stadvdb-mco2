@@ -144,6 +144,10 @@ BEGIN
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
     END IF;
+
+    IF sleep_seconds > 0 THEN
+    SELECT SLEEP(sleep_seconds);
+    END IF;
 END$$
 
 CREATE PROCEDURE distributed_delete(
@@ -156,6 +160,10 @@ BEGIN
 
     -- Delete from local node if exists
     DELETE FROM title_ft WHERE tconst = new_tconst;
+
+    IF sleep_seconds > 0 THEN
+    SELECT SLEEP(sleep_seconds);
+    END IF;
 END$$
 
 

@@ -114,6 +114,8 @@ BEGIN
 
     START TRANSACTION;
 
+    SET new_tconst = TRIM(new_tconst);
+
     -- Get initial startYear
     SELECT startYear INTO old_startYear
     FROM `stadvdb-mco2`.title_ft
@@ -188,6 +190,10 @@ BEGIN
             WHERE tconst = new_tconst;
         END IF;
     END IF;
+
+    IF sleep_seconds > 0 THEN
+        SELECT SLEEP(sleep_seconds);
+        END IF;
 
     COMMIT;
 END$$

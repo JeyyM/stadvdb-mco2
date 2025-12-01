@@ -102,94 +102,94 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 
 // Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
+  let connection;
   try {
     const {
-      tconst,
-      primaryTitle,
-      runtimeMinutes,
-      averageRating,
-      numVotes,
-      startYear
+      tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear,
+      sleepSeconds = 0, isolationLevel = 'READ COMMITTED'
     } = req.body;
 
-    if (!tconst) {
-      return res.status(400).json({ success: false, message: 'tconst is required' });
-    }
+    if (!tconst) return res.status(400).json({ success: false, message: 'tconst is required' });
 
     // --- RECOVERY LOGIC START ---
-    // For updates, the target node might change if startYear changes
-    // but primarily we track where the data *ends up*
-    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
     const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
-    const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
-    const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
+    const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?, ?)';
+    const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, sleepSeconds];
 
     const transactionId = await RecoveryManager.logTransaction('UPDATE', targetNode, sql, params);
 
     try {
-      const [results] = await db.query(sql, params);
-      
+      // Use Manual Connection for Isolation Levels
+      connection = await db.getConnection();
+      await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+      const [results] = await connection.query(sql, params);
+
       if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-      
-      res.json({ success: true, data: results });
+
+      res.json({ success: true, data: results, isolationLevelUsed: isolationLevel });
 
     } catch (dbError) {
       if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      throw dbError;
+
+      if (dbError.code === 'ER_LOCK_DEADLOCK') {
+        res.status(409).json({ success: false, message: 'Deadlock detected' });
+      } else {
+        throw dbError;
+      }
     }
     // --- RECOVERY LOGIC END ---
 
   } catch (error) {
     console.error('Error in distributed_update:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_update',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error', error: error.message });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 // Distributed delete system
 app.post('/api/titles/distributed-delete', async (req, res) => {
+  let connection;
   try {
-    const { tconst } = req.body;
-    if (!tconst) {
-      return res.status(400).json({ success: false, message: 'tconst is required' });
-    }
+    const { tconst, sleepSeconds = 0, isolationLevel = 'READ COMMITTED' } = req.body;
+    if (!tconst) return res.status(400).json({ success: false, message: 'tconst is required' });
 
-    // --- RECOVERY LOGIC START ---
-    // Deletes broadcast to all nodes, so we log it as affecting MAIN (which handles the broadcast)
-    const sql = 'CALL distributed_delete(?)';
-    const params = [tconst];
+    const sql = 'CALL distributed_delete(?, ?)';
+    const params = [tconst, sleepSeconds]; // Ensure your Delete SQL accepts sleep_seconds!
 
     const transactionId = await RecoveryManager.logTransaction('DELETE', 'MAIN', sql, params);
 
     try {
-      const [results] = await db.query(sql, params);
+      connection = await db.getConnection();
+      await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+      const [results] = await connection.query(sql, params);
       if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
       res.json({ success: true, data: results });
     } catch (dbError) {
       if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
       throw dbError;
     }
-    // --- RECOVERY LOGIC END ---
-
   } catch (error) {
     console.error('Error in distributed_delete:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_delete',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error', error: error.message });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 // 3. READ-ONLY ROUTES (No Logging Needed)
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
+  let connection;
   try {
-    const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
-    const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
+    const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10, isolationLevel = 'READ COMMITTED' } = req.query;
+
+    connection = await db.getConnection();
+    await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+    const [results] = await connection.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
     res.json({
       success: true,
       count: results[0]?.length || 0,
@@ -197,19 +197,22 @@ app.get('/api/titles/distributed-select', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in distributed_select:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_select',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error', error: error.message });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 // Distributed search system
 app.get('/api/titles/distributed-search', async (req, res) => {
+  let connection;
   try {
-    const { search_term = '', limit_count = 20 } = req.query;
-    const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
+    const { search_term = '', limit_count = 20, isolationLevel = 'READ COMMITTED' } = req.query;
+
+    connection = await db.getConnection();
+    await connection.query(`SET SESSION TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+    const [results] = await connection.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
     res.json({
       success: true,
       count: results[0]?.length || 0,
@@ -217,11 +220,9 @@ app.get('/api/titles/distributed-search', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in distributed_search:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_search',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error', error: error.message });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
