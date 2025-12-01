@@ -270,12 +270,17 @@ function App() {
     }
   };
 
-  // Determine which node we're connected to based on the API URL port
+  // Determine which node we're connected to based on the API URL port or domain
   const getNodeName = () => {
     const apiUrl = process.env.REACT_APP_API_URL || '';
+    // Check for localhost ports
     if (apiUrl.includes(':60751')) return 'Main Node';
     if (apiUrl.includes(':60752')) return 'Node A';
     if (apiUrl.includes(':60753')) return 'Node B';
+    // Check for Render URLs
+    if (apiUrl.includes('stadvdb-mco2-main')) return 'Main Node';
+    if (apiUrl.includes('stadvdb-mco2-node-a') || apiUrl.includes('stadvdb-mco2-a')) return 'Node A';
+    if (apiUrl.includes('stadvdb-mco2-node-b') || apiUrl.includes('stadvdb-mco2-b')) return 'Node B';
     return 'Unknown Node';
   };
 
