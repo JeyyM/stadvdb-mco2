@@ -159,7 +159,7 @@ async function runCase3(isoLevel) {
             resultMsg = `⚠️ No Wait (${duration}ms). Risk of Lost Update.`;
         }
 
-        if (finalState && finalState.primaryTitle === "User B Win")
+        if (finalState && finalState.primaryTitle === "User B Win" || "User A Win")
             resultMsg = `${resultMsg} ❌ Lost Update.`
     } catch (e) {
         if (e.response && e.response.status === 409) {
