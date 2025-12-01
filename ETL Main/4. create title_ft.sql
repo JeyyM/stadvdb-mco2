@@ -74,6 +74,7 @@ SELECT
 FROM title_basics AS b
 LEFT JOIN title_ratings AS r
   ON r.tconst = b.tconst
-WHERE b.titleType IS NOT NULL;
+WHERE b.titleType IS NOT NULL
+  AND b.startYear >= 2022;
 
 SELECT * FROM title_ft LIMIT 10;
