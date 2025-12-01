@@ -114,6 +114,8 @@ BEGIN
     -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
+    SET @federated_operation = NULL;
+    SET @is_local_transaction = NULL;
 END$$
 
 DELIMITER ;
@@ -254,6 +256,8 @@ BEGIN
     -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
+    SET @federated_operation = NULL;
+    SET @is_local_transaction = NULL;
 END$$
 
 DELIMITER ;
@@ -316,6 +320,8 @@ BEGIN
     -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
+    SET @federated_operation = NULL;
+    SET @is_local_transaction = NULL;
 END$$
 
 DELIMITER ;
