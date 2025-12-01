@@ -203,7 +203,7 @@ DELIMITER ;
 DELIMITER $$
 
 CREATE PROCEDURE distributed_delete(
-    IN new_tconst VARCHAR(12)
+    IN new_tconst VARCHAR(12),
     IN sleep_seconds INT
 )
 

@@ -203,6 +203,11 @@ CREATE PROCEDURE distributed_search(
     IN limit_count INT UNSIGNED
 )
 BEGIN
+
+    SELECT * FROM title_ft
+    WHERE primaryTitle LIKE CONCAT('%', search_term, '%')
+
+    UNION DISTINCT
     -- Search from Main which has all data
     SELECT * FROM title_ft_main
     WHERE primaryTitle LIKE CONCAT('%', search_term, '%')
