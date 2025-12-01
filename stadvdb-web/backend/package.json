@@ -4,26 +4,31 @@
   "description": "Backend API for STADVDB IMDB Database",
   "main": "server.js",
   "scripts": {
-  "prestart": "node kill-port.js",
-  "start:main": "cross-env NODE_ENV=production DOTENV_CONFIG_PATH=.env.main node server.js",
-  "start:a": "cross-env NODE_ENV=production DOTENV_CONFIG_PATH=.env.a node server.js",
-  "start:b": "cross-env NODE_ENV=production DOTENV_CONFIG_PATH=.env.b node server.js",
-  "start:all": "concurrently \"npm run start:main\" \"npm run start:a\" \"npm run start:b\"",
-  "start": "npm run start:all",
-  "dev": "nodemon server.js"
+    "prestart": "node kill-port.js",
+    "start:main": "cross-env NODE_ENV=production DOTENV_CONFIG_PATH=.env.main node server.js",
+    "start:a": "cross-env NODE_ENV=production DOTENV_CONFIG_PATH=.env.a node server.js",
+    "start:b": "cross-env NODE_ENV=production DOTENV_CONFIG_PATH=.env.b node server.js",
+    "start:all": "concurrently \"npm run start:main\" \"npm run start:a\" \"npm run start:b\"",
+    "start": "npm run start:all",
+    "dev": "nodemon server.js"
   },
-  "keywords": ["imdb", "mysql", "express"],
+  "keywords": [
+    "imdb",
+    "mysql",
+    "express"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "mysql2": "^3.6.5",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
     "concurrently": "^8.2.2",
-    "cross-env": "^7.0.3"
+    "cross-env": "^7.0.3",
+    "nodemon": "^3.0.2"
   }
 }

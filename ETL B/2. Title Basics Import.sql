@@ -15,7 +15,7 @@ CREATE TABLE title_basics (
   genres TEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-LOAD DATA LOCAL INFILE 'C:\\Users\\asus\\Desktop\\STADVDB NEW\\imdbdata\\title.basics.tsv'
+LOAD DATA LOCAL INFILE 'C:\\Users\\zan_laptop\\Desktop\\stadvdb-mco2-stuff\\imdbdata\\title.basics.tsv'
 INTO TABLE title_basics
 CHARACTER SET utf8mb4
 FIELDS TERMINATED BY '\t' ESCAPED BY '\\'

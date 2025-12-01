@@ -7,99 +7,30 @@ const RecoveryManager = require('./recoveryManager');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/// Middleware
-// Updated CORS to allow Vercel deployments
-const corsOptions = {
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:60751',
-    'http://localhost:60752',
-    'http://localhost:60753',
-    /\.vercel\.app$/, // Allow all Vercel deployments
-    /\.onrender\.com$/ // Allow Render deployments
-  ],
-  credentials: true,
-  optionsSuccessStatus: 200
-};
-app.use(cors(corsOptions));
+// Middleware
+app.use(cors());
 app.use(express.json());
 
 // ============================================================================
 // API ROUTES
-
-// 1. RECOVERY & LOGGING ENDPOINTS (Yazan sectio)
-// Trigger the recovery process manually
-// Usage: POST /api/recovery/sync with body { "node": "NODE_A" }
-app.post('/api/recovery/sync', async (req, res) => {
+// Distributed delete system
+app.post('/api/titles/distributed-delete', async (req, res) => {
   try {
-    const { node } = req.body; // Expects 'NODE_A' or 'NODE_B'
-    
-    if (!node) {
-      return res.status(400).json({ success: false, message: 'Node name required (NODE_A or NODE_B)' });
+    const { tconst } = req.body;
+    if (!tconst) {
+      return res.status(400).json({ success: false, message: 'tconst is required' });
     }
-
-    console.log(`Manual recovery triggered for ${node}`);
-    await RecoveryManager.recoverFailedTransactions(node);
-    
-    res.json({ success: true, message: `Recovery process finished for ${node}` });
+    const [results] = await db.query('CALL distributed_delete(?)', [tconst]);
+    res.json({ success: true, data: results });
   } catch (error) {
-    console.error('Error triggering recovery:', error);
-    res.status(500).json({ success: false, message: 'Recovery failed', error: error.message });
-  }
-});
-
-// 2. DISTRIBUTED TRANSACTIONS (Modified with Recovery Logic)
-// Distributed insert system
-app.post('/api/titles/distributed-insert', async (req, res) => {
-  try {
-    const {
-      tconst,
-      primaryTitle,
-      runtimeMinutes,
-      averageRating,
-      numVotes,
-      startYear
-    } = req.body;
-
-    // Validate required fields
-    if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
-      return res.status(400).json({ success: false, message: 'All fields are required' });
-    }
-
-    // --- RECOVERY LOGIC START ---
-    // Determine which node this SHOULD go to based on fragmentation rules
-    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
-    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
-    const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
-    const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
-
-    const transactionId = await RecoveryManager.logTransaction('INSERT', targetNode, sql, params);
-
-    try {
-      const [results] = await db.query(sql, params);
-
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-      
-      res.json({ success: true, data: results });
-
-    } catch (dbError) {
-      console.error(`Transaction ${transactionId} failed. Logging error.`);
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      
-      throw dbError;
-    }
-    // --- RECOVERY LOGIC END ---
-
-  } catch (error) {
-    console.error('Error in distributed_insert:', error);
+    console.error('Error in distributed_delete:', error);
     res.status(500).json({
       success: false,
-      message: 'Error in distributed_insert',
+      message: 'Error in distributed_delete',
       error: error.message
     });
   }
 });
-
 // Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
   try {
@@ -112,33 +43,24 @@ app.post('/api/titles/distributed-update', async (req, res) => {
       startYear
     } = req.body;
 
+    // Validate required fields
     if (!tconst) {
       return res.status(400).json({ success: false, message: 'tconst is required' });
     }
 
-    // --- RECOVERY LOGIC START ---
-    // For updates, the target node might change if startYear changes
-    // but primarily we track where the data *ends up*
-    // >= 2025 = NODE_A, < 2025 (including 2024) = NODE_B
-    const targetNode = (startYear >= 2025) ? 'NODE_A' : 'NODE_B';
-    const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
-    const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
-
-    const transactionId = await RecoveryManager.logTransaction('UPDATE', targetNode, sql, params);
-
-    try {
-      const [results] = await db.query(sql, params);
-      
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-      
-      res.json({ success: true, data: results });
-
-    } catch (dbError) {
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      throw dbError;
-    }
-    // --- RECOVERY LOGIC END ---
-
+    // Call the stored procedure (6 args)
+    const [results] = await db.query(
+      'CALL distributed_update(?, ?, ?, ?, ?, ?)',
+      [
+        tconst,
+        primaryTitle,
+        runtimeMinutes,
+        averageRating,
+        numVotes,
+        startYear
+      ]
+    );
+    res.json({ success: true, data: results });
   } catch (error) {
     console.error('Error in distributed_update:', error);
     res.status(500).json({
@@ -148,43 +70,8 @@ app.post('/api/titles/distributed-update', async (req, res) => {
     });
   }
 });
+// ============================================================================
 
-// Distributed delete system
-app.post('/api/titles/distributed-delete', async (req, res) => {
-  try {
-    const { tconst } = req.body;
-    if (!tconst) {
-      return res.status(400).json({ success: false, message: 'tconst is required' });
-    }
-
-    // --- RECOVERY LOGIC START ---
-    // Deletes broadcast to all nodes, so we log it as affecting MAIN (which handles the broadcast)
-    const sql = 'CALL distributed_delete(?)';
-    const params = [tconst];
-
-    const transactionId = await RecoveryManager.logTransaction('DELETE', 'MAIN', sql, params);
-
-    try {
-      const [results] = await db.query(sql, params);
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'COMMITTED');
-      res.json({ success: true, data: results });
-    } catch (dbError) {
-      if (transactionId) await RecoveryManager.updateLogStatus(transactionId, 'FAILED', dbError.message);
-      throw dbError;
-    }
-    // --- RECOVERY LOGIC END ---
-
-  } catch (error) {
-    console.error('Error in distributed_delete:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error in distributed_delete',
-      error: error.message
-    });
-  }
-});
-
-// 3. READ-ONLY ROUTES (No Logging Needed)
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
   try {
@@ -204,7 +91,6 @@ app.get('/api/titles/distributed-select', async (req, res) => {
     });
   }
 });
-
 // Distributed search system
 app.get('/api/titles/distributed-search', async (req, res) => {
   try {
@@ -225,7 +111,12 @@ app.get('/api/titles/distributed-search', async (req, res) => {
   }
 });
 
-// Aggregation Route
+// Test route
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'Backend API is working!' });
+});
+
+
 app.get('/api/aggregation', async (req, res) => {
   try {
     const [results] = await db.query('CALL distributed_aggregation()');
@@ -252,7 +143,47 @@ app.get('/api/aggregation', async (req, res) => {
   }
 });
 
-// Advanced Search
+// Distributed insert system
+app.post('/api/titles/distributed-insert', async (req, res) => {
+  try {
+    const {
+      tconst,
+      primaryTitle,
+      runtimeMinutes,
+      averageRating,
+      numVotes,
+      startYear
+    } = req.body;
+
+    // Validate required fields (6 args, weightedRating is now calculated in SQL)
+    if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    // Call the stored procedure (6 args)
+    const [results] = await db.query(
+      'CALL distributed_insert(?, ?, ?, ?, ?, ?)',
+      [
+        tconst,
+        primaryTitle,
+        runtimeMinutes,
+        averageRating,
+        numVotes,
+        startYear
+      ]
+    );
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Error in distributed_insert:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in distributed_insert',
+      error: error.message
+    });
+  }
+});
+
+// Title search system
 app.get('/api/titles/search-advanced', async (req, res) => {
   try {
     const {
@@ -380,11 +311,6 @@ app.get('/api/titles/top-by-year', async (req, res) => {
       error: error.message
     });
   }
-});
-
-// Test route
-app.get('/api/test', (req, res) => {
-  res.json({ message: 'Backend API is working!' });
 });
 
 // ============================================================================

@@ -35,11 +35,10 @@ body,
 
 body {
   font-family: var(--font-sans);
-  background: radial-gradient(circle at top left, #e5f0ff, #f3f4f6 40%, #ffffff);
   color: var(--text-main);
 }
 
-/* Root layout */
+/* Root layout  */
 
 .app-root {
   display: flex;
@@ -262,8 +261,6 @@ body {
 
 .table-wrapper {
   margin-top: 8px;
-  max-height: 380px;
-  overflow: auto;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: #f9fafb;
@@ -276,10 +273,7 @@ body {
 }
 
 .data-table thead {
-  position: sticky;
-  top: 0;
   background: #eff6ff;
-  z-index: 1;
 }
 
 .data-table th,

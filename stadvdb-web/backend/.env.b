@@ -1,6 +1,8 @@
 # .env for stadvdb-mco2-b
-PORT=5002
+# Node B - Slave with startYear < 2024
+PORT=60753
 DB_NAME=stadvdb-mco2-b
-DB_HOST=127.0.0.1
-DB_USER=root
-DB_PASSWORD=aethermain
+DB_HOST=ccscloud.dlsu.edu.ph
+DB_PORT=60753
+DB_USER=g18
+DB_PASSWORD=fuckingpassword
