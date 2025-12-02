@@ -1,6 +1,38 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 
+// Failover fetch - tries primary backend, falls back to Main if it fails
+const MAIN_BACKEND_URL = 'https://stadvdb-mco2-main.onrender.com';
+
+async function fetchWithFailover(url, options = {}) {
+  const primaryUrl = url.startsWith('http') ? url : `${process.env.REACT_APP_API_URL}${url}`;
+  
+  try {
+    const response = await fetch(primaryUrl, options);
+    if (response.ok) return response;
+    throw new Error(`HTTP ${response.status}`);
+  } catch (primaryError) {
+    console.warn(`Primary backend failed (${primaryUrl}), trying Main...`, primaryError.message);
+    
+    // Build fallback URL to Main backend
+    const fallbackUrl = url.startsWith('http') 
+      ? url.replace(process.env.REACT_APP_API_URL, MAIN_BACKEND_URL)
+      : `${MAIN_BACKEND_URL}${url}`;
+    
+    try {
+      const response = await fetch(fallbackUrl, options);
+      if (response.ok) {
+        console.log('✓ Failover to Main backend successful');
+        return response;
+      }
+      throw new Error(`HTTP ${response.status}`);
+    } catch (fallbackError) {
+      console.error('Both primary and Main backend failed');
+      throw new Error(`All backends failed. Primary: ${primaryError.message}, Main: ${fallbackError.message}`);
+    }
+  }
+}
+
 function App() {
   const [showEditPopup, setShowEditPopup] = useState(false);
   // Track if popup is open for disabling buttons 
@@ -40,7 +72,7 @@ function App() {
     setDeleteLoading(true);
     setEditError(null);
     try {
-  const res = await fetch(`${process.env.REACT_APP_API_URL}/api/titles/distributed-delete`, {
+  const res = await fetchWithFailover(`/api/titles/distributed-delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tconst: editForm.tconst }),
@@ -101,7 +133,7 @@ function App() {
     try {
       let url, body;
       if (editRow) {
-        url = `${process.env.REACT_APP_API_URL}/api/titles/distributed-update`;
+        url = `/api/titles/distributed-update`;
         body = JSON.stringify({
           tconst: editForm.tconst,
           primaryTitle: editForm.primaryTitle,
@@ -111,7 +143,7 @@ function App() {
           startYear: editForm.startYear,
         });
       } else {
-  url = `${process.env.REACT_APP_API_URL}/api/titles/distributed-insert`;
+  url = `/api/titles/distributed-insert`;
         body = JSON.stringify({
           tconst: editForm.tconst,
           primaryTitle: editForm.primaryTitle,
@@ -122,7 +154,7 @@ function App() {
           weightedRating: editForm.weightedRating,
         });
       }
-      const res = await fetch(url, {
+      const res = await fetchWithFailover(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -177,7 +209,7 @@ function App() {
   const fetchAggregations = () => {
     setLoadingAggregations(true);
     setAggError(null);
-  fetch(`${process.env.REACT_APP_API_URL}/api/aggregation`)
+  fetchWithFailover(`/api/aggregation`)
       .then((response) => response.json())
       .then((data) => {
         setAggregations(data.data);
@@ -209,8 +241,8 @@ function App() {
     setHasSearched(true);
 
     try {
-      const res = await fetch(
-        `${process.env.REACT_APP_API_URL}/api/titles/distributed-search?search_term=${encodeURIComponent(
+      const res = await fetchWithFailover(
+        `/api/titles/distributed-search?search_term=${encodeURIComponent(
           searchTerm
         )}&limit_count=${limit}`
       );
@@ -265,8 +297,8 @@ function App() {
     setHasSelected(true);
 
     try {
-      const res = await fetch(
-        `${process.env.REACT_APP_API_URL}/api/titles/distributed-select?select_column=${encodeURIComponent(
+      const res = await fetchWithFailover(
+        `/api/titles/distributed-select?select_column=${encodeURIComponent(
           selectColumn
         )}&order_direction=${orderDirection}&limit_count=${selectLimit}`
       );
