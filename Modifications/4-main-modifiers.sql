@@ -56,10 +56,17 @@ BEGIN
     DECLARE calculated_weightedRating DECIMAL(4,2);
     DECLARE current_transaction_id VARCHAR(36);
     
-    -- Handler for federated table errors (just continue, don't crash)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for ALL federated table errors (just continue, don't crash)
+    -- 1429: Unable to connect to foreign data source
+    -- 1158: Got an error reading communication packets  
+    -- 1189: Net read timeout
+    -- 2013: Lost connection to MySQL server
+    -- 1105: Unknown error (can occur with federated tables)
+    -- Using SQLSTATE for broader coverage
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189, 2013, 1105, SQLSTATE 'HY000'
     BEGIN
         -- Federated table connection failed - continue without replication
+        -- This allows Main to work even when Node A or B is down
     END;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -195,13 +202,17 @@ BEGIN
     DECLARE updated_weightedRating DECIMAL(4,2);
     DECLARE current_transaction_id VARCHAR(36);
     
-    -- Handler for federated table errors (just continue, don't crash)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for ALL federated table errors (just continue, don't crash)
+    -- 1429: Unable to connect to foreign data source
+    -- 1158: Got an error reading communication packets
+    -- 1189: Net read timeout
+    -- 2013: Lost connection to MySQL server
+    -- 1105: Unknown error (can occur with federated tables)
+    -- Using SQLSTATE for broader coverage
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189, 2013, 1105, SQLSTATE 'HY000'
     BEGIN
-        -- Error 1429: Unable to connect to foreign data source
-        -- Error 1158: Got an error reading communication packets
-        -- Error 1189: Net read timeout
-        -- Just continue - federated replication will fail silently
+        -- Federated table connection failed - continue without replication
+        -- This allows Main to work even when Node A or B is down
     END;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -404,10 +415,17 @@ BEGIN
     DECLARE old_numVotes INT UNSIGNED;
     DECLARE old_weightedRating DECIMAL(10,2);
     
-    -- Handler for federated table errors (just continue, don't crash)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189
+    -- Handler for ALL federated table errors (just continue, don't crash)
+    -- 1429: Unable to connect to foreign data source
+    -- 1158: Got an error reading communication packets
+    -- 1189: Net read timeout
+    -- 2013: Lost connection to MySQL server
+    -- 1105: Unknown error (can occur with federated tables)
+    -- Using SQLSTATE for broader coverage
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189, 2013, 1105, SQLSTATE 'HY000'
     BEGIN
         -- Federated table connection failed - continue without replication
+        -- This allows Main to work even when Node A or B is down
     END;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -510,6 +528,19 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE current_transaction_id VARCHAR(36);
+    
+    -- Handler for ALL federated table errors (just continue, don't crash)
+    -- 1429: Unable to connect to foreign data source
+    -- 1158: Got an error reading communication packets
+    -- 1189: Net read timeout
+    -- 2013: Lost connection to MySQL server
+    -- 1105: Unknown error (can occur with federated tables)
+    -- Using SQLSTATE for broader coverage
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1189, 2013, 1105, SQLSTATE 'HY000'
+    BEGIN
+        -- Federated table connection failed - continue without replication
+        -- This allows Main to work even when Node A or B is down
+    END;
     
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
