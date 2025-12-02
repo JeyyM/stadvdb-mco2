@@ -3,7 +3,7 @@ import './App.css';
 
 function App() {
   const [showEditPopup, setShowEditPopup] = useState(false);
-  // Track if popup is open for disabling buttons  
+  // Track if popup is open for disabling buttons 
   const popupActive = showEditPopup;
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -39,23 +39,13 @@ function App() {
     if (!window.confirm('Are you sure you want to delete this entry?')) return;
     setDeleteLoading(true);
     setEditError(null);
-    
-    console.log('=== DELETE REQUEST ===');
-    console.log('Deleting tconst:', editForm.tconst);
-    
     try {
   const res = await fetch(`${process.env.REACT_APP_API_URL}/api/titles/distributed-delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tconst: editForm.tconst }),
       });
-      
-      console.log('Delete response status:', res.status);
-      console.log('Delete response ok:', res.ok);
-      
       const data = await res.json();
-      console.log('Delete response data:', data);
-      
       if (data.success) {
         setEditSuccess('Deleted successfully!');
         setTimeout(() => {
@@ -72,15 +62,12 @@ function App() {
           fetchAggregations();
         }, 800);
       } else {
-        console.error('Delete failed:', data.message);
         setEditError(data.message || 'Delete failed');
       }
     } catch (err) {
-      console.error('Delete request error:', err);
       setEditError('Delete failed');
     } finally {
       setDeleteLoading(false);
-      console.log('=== DELETE COMPLETE ===');
     }
   };
 
@@ -111,11 +98,6 @@ function App() {
     setEditLoading(true);
     setEditError(null);
     setEditSuccess(null);
-    
-    console.log('=== EDIT/INSERT REQUEST ===');
-    console.log('Edit mode:', editRow ? 'UPDATE' : 'INSERT');
-    console.log('Form data:', editForm);
-    
     try {
       let url, body;
       if (editRow) {
@@ -140,22 +122,12 @@ function App() {
           weightedRating: editForm.weightedRating,
         });
       }
-      
-      console.log('Request URL:', url);
-      console.log('Request body:', body);
-      
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
       });
-      
-      console.log('Response status:', res.status);
-      console.log('Response ok:', res.ok);
-      
       const data = await res.json();
-      console.log('Response data:', data);
-      
       if (data.success) {
         setEditSuccess(editRow ? 'Update successful!' : 'Insert successful!');
         setTimeout(() => {
@@ -172,15 +144,12 @@ function App() {
           fetchAggregations();
         }, 1000);
       } else {
-        console.error('Operation failed:', data.message);
         setEditError(data.message || (editRow ? 'Update failed' : 'Insert failed'));
       }
     } catch (err) {
-      console.error('Request error:', err);
       setEditError(editRow ? 'Update failed' : 'Insert failed');
     } finally {
       setEditLoading(false);
-      console.log('=== REQUEST COMPLETE ===');
     }
   };
 

@@ -24,19 +24,24 @@ CREATE TRIGGER title_ft_before_insert
 BEFORE INSERT ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log if this is a direct operation (not from Main's federated call)
-    -- Check if we're already in a transaction from Main by seeing if log already has entries
-    IF @current_transaction_id IS NULL OR @federated_operation IS NULL THEN
-        -- This is a direct local operation, create new transaction
-        SET @current_transaction_id = UUID();
-        SET @current_log_sequence = 0;
-        SET @is_local_transaction = 1;
+    -- Only log if this is NOT a federated operation from Main
+    -- @federated_operation is explicitly set to 1 when Main calls via federated table
+    IF IFNULL(@federated_operation, 0) = 0 THEN
+        -- This is a direct local operation
+        -- Initialize transaction if not already set by stored procedure
+        IF @current_transaction_id IS NULL THEN
+            SET @current_transaction_id = UUID();
+        END IF;
         
-        INSERT INTO transaction_log 
-        (transaction_id, log_sequence, log_type, source_node, timestamp)
-        VALUES (@current_transaction_id, 1, 'BEGIN', 'NODE_A', NOW(6));
-        
-        SET @current_log_sequence = 1;
+        IF @current_log_sequence IS NULL THEN
+            SET @current_log_sequence = 0;
+            
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, 1, 'BEGIN', 'NODE_A', NOW(6));
+            
+            SET @current_log_sequence = 1;
+        END IF;
     END IF;
 END$$
 
@@ -44,8 +49,8 @@ CREATE TRIGGER title_ft_after_insert
 AFTER INSERT ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log details if this is a local transaction
-    IF @is_local_transaction = 1 THEN
+    -- Only log details if this is NOT a federated operation
+    IF IFNULL(@federated_operation, 0) = 0 AND @current_transaction_id IS NOT NULL THEN
         SET @current_log_sequence = @current_log_sequence + 1;
         
         INSERT INTO transaction_log 
@@ -65,6 +70,16 @@ BEGIN
              'startYear', NEW.startYear
          ),
          'INSERT', 'NODE_A', NOW(6));
+        
+        -- Log COMMIT
+        SET @current_log_sequence = @current_log_sequence + 1;
+        INSERT INTO transaction_log 
+        (transaction_id, log_sequence, log_type, source_node, timestamp)
+        VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'NODE_A', NOW(6));
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
     END IF;
 END$$
 
@@ -76,18 +91,21 @@ CREATE TRIGGER title_ft_before_update
 BEFORE UPDATE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log if this is a direct operation (not from Main's federated call)
-    IF @current_transaction_id IS NULL OR @federated_operation IS NULL THEN
-        -- This is a direct local operation
-        SET @current_transaction_id = UUID();
-        SET @current_log_sequence = 0;
-        SET @is_local_transaction = 1;
+    -- Only log if this is NOT a federated operation from Main
+    IF IFNULL(@federated_operation, 0) = 0 THEN
+        IF @current_transaction_id IS NULL THEN
+            SET @current_transaction_id = UUID();
+        END IF;
         
-        INSERT INTO transaction_log 
-        (transaction_id, log_sequence, log_type, source_node, timestamp)
-        VALUES (@current_transaction_id, 1, 'BEGIN', 'NODE_A', NOW(6));
-        
-        SET @current_log_sequence = 1;
+        IF @current_log_sequence IS NULL THEN
+            SET @current_log_sequence = 0;
+            
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, 1, 'BEGIN', 'NODE_A', NOW(6));
+            
+            SET @current_log_sequence = 1;
+        END IF;
     END IF;
 END$$
 
@@ -95,8 +113,8 @@ CREATE TRIGGER title_ft_after_update
 AFTER UPDATE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log details if this is a local transaction
-    IF @is_local_transaction = 1 THEN
+    -- Only log details if this is NOT a federated operation
+    IF IFNULL(@federated_operation, 0) = 0 AND @current_transaction_id IS NOT NULL THEN
         SET @current_log_sequence = @current_log_sequence + 1;
         
         INSERT INTO transaction_log 
@@ -124,6 +142,16 @@ BEGIN
              'startYear', NEW.startYear
          ),
          'UPDATE', 'NODE_A', NOW(6));
+        
+        -- Log COMMIT
+        SET @current_log_sequence = @current_log_sequence + 1;
+        INSERT INTO transaction_log 
+        (transaction_id, log_sequence, log_type, source_node, timestamp)
+        VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'NODE_A', NOW(6));
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
     END IF;
 END$$
 
@@ -135,18 +163,21 @@ CREATE TRIGGER title_ft_before_delete
 BEFORE DELETE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log if this is a direct operation (not from Main's federated call)
-    IF @current_transaction_id IS NULL OR @federated_operation IS NULL THEN
-        -- This is a direct local operation
-        SET @current_transaction_id = UUID();
-        SET @current_log_sequence = 0;
-        SET @is_local_transaction = 1;
+    -- Only log if this is NOT a federated operation from Main
+    IF IFNULL(@federated_operation, 0) = 0 THEN
+        IF @current_transaction_id IS NULL THEN
+            SET @current_transaction_id = UUID();
+        END IF;
         
-        INSERT INTO transaction_log 
-        (transaction_id, log_sequence, log_type, source_node, timestamp)
-        VALUES (@current_transaction_id, 1, 'BEGIN', 'NODE_A', NOW(6));
-        
-        SET @current_log_sequence = 1;
+        IF @current_log_sequence IS NULL THEN
+            SET @current_log_sequence = 0;
+            
+            INSERT INTO transaction_log 
+            (transaction_id, log_sequence, log_type, source_node, timestamp)
+            VALUES (@current_transaction_id, 1, 'BEGIN', 'NODE_A', NOW(6));
+            
+            SET @current_log_sequence = 1;
+        END IF;
     END IF;
 END$$
 
@@ -154,8 +185,8 @@ CREATE TRIGGER title_ft_after_delete
 AFTER DELETE ON title_ft
 FOR EACH ROW
 BEGIN
-    -- Only log details if this is a local transaction
-    IF @is_local_transaction = 1 THEN
+    -- Only log details if this is NOT a federated operation
+    IF IFNULL(@federated_operation, 0) = 0 AND @current_transaction_id IS NOT NULL THEN
         SET @current_log_sequence = @current_log_sequence + 1;
         
         INSERT INTO transaction_log 
@@ -175,6 +206,16 @@ BEGIN
          ),
          NULL,
          'DELETE', 'NODE_A', NOW(6));
+        
+        -- Log COMMIT
+        SET @current_log_sequence = @current_log_sequence + 1;
+        INSERT INTO transaction_log 
+        (transaction_id, log_sequence, log_type, source_node, timestamp)
+        VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'NODE_A', NOW(6));
+        
+        -- Clear session variables
+        SET @current_transaction_id = NULL;
+        SET @current_log_sequence = NULL;
     END IF;
 END$$
 
