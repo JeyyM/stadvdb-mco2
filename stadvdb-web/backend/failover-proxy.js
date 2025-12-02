@@ -87,7 +87,7 @@ async function checkDatabaseHealth() {
 }
 
 /**
- * Check health of *remote* nodes via /api/recovery/status
+ * Check health of remote nodes via /api/recovery/status
  */
 async function checkRemoteNodeHealth() {
   const now = Date.now();
@@ -198,7 +198,7 @@ async function forwardToMain(req, res, next) {
   }
 
   console.log(
-    `🔄 ${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`
+    `${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`
   );
 
   const targetUrl = `${proxyTarget.url}${req.originalUrl}`;
