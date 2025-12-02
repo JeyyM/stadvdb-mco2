@@ -26,9 +26,10 @@ CREATE PROCEDURE log_to_remote_node(
     IN op_type VARCHAR(10)  -- 'INSERT', 'UPDATE', 'DELETE'
 )
 BEGIN
-    -- Handler for any errors when logging to federated tables
-    -- If remote node is down, just continue silently - recovery will handle it later
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION
+    -- Handler for federated errors when logging to remote nodes
+    -- Error codes: 1429 (can't connect), 1158, 1159, 1189 (timeouts), 
+    --              2013, 2006 (connection lost), 1296 (federated error wrapper)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296
     BEGIN
         -- Silent failure - recovery system will replay these logs when node comes back
     END;
@@ -73,24 +74,6 @@ BEGIN
         SET federated_error = 1;
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
-    END;
-
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        -- Log ABORT before rolling back
-        IF @current_transaction_id IS NOT NULL THEN
-            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
-            INSERT INTO transaction_log 
-            (transaction_id, log_sequence, log_type, source_node, timestamp)
-            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
-        END IF;
-        
-        -- Clear session variables
-        SET @current_transaction_id = NULL;
-        SET @current_log_sequence = NULL;
-        
-        ROLLBACK;
-        RESIGNAL;
     END;
 
     -- Initialize transaction logging
@@ -218,6 +201,13 @@ BEGIN
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
     END;
+    
+    -- Also handle error 1296 (ER_GET_ERRMSG - wrapper for federated connection errors)
+    DECLARE CONTINUE HANDLER FOR 1296
+    BEGIN
+        SET federated_error = 1;
+        -- Federated connection failed, continue without rolling back
+    END;
 
     -- Initialize transaction logging
     SET current_transaction_id = UUID();
@@ -263,6 +253,16 @@ BEGIN
         startYear = new_startYear,
         weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
+
+    -- Log UPDATE to Main
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'UPDATE', 'MAIN', NOW(6));
+
+    -- Create a savepoint before attempting federated operations
+    -- If federated operations fail, we roll back to here but keep Main update
+    SAVEPOINT before_federated;
 
     -- Set flag to prevent triggers on federated nodes from logging
     SET @federated_operation = 1;
@@ -368,6 +368,11 @@ BEGIN
         END IF;
     END IF;
 
+    -- If federated operations failed, roll back to savepoint but keep Main update
+    IF federated_error = 1 THEN
+        ROLLBACK TO SAVEPOINT before_federated;
+    END IF;
+
     -- Clear federated flag
     SET @federated_operation = NULL;
 
@@ -412,22 +417,11 @@ BEGIN
         -- Recovery system will sync when nodes come back online
     END;
     
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    -- Also handle error 1296 (ER_GET_ERRMSG - wrapper for federated connection errors)
+    DECLARE CONTINUE HANDLER FOR 1296
     BEGIN
-        -- Log ABORT before rolling back
-        IF @current_transaction_id IS NOT NULL THEN
-            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
-            INSERT INTO transaction_log 
-            (transaction_id, log_sequence, log_type, source_node, timestamp)
-            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
-        END IF;
-        
-        -- Clear session variables
-        SET @current_transaction_id = NULL;
-        SET @current_log_sequence = NULL;
-        
-        ROLLBACK;
-        RESIGNAL;
+        SET federated_error = 1;
+        -- Federated connection failed, continue without rolling back
     END;
 
     -- Initialize transaction logging
@@ -445,6 +439,15 @@ BEGIN
 
     DELETE FROM `stadvdb-mco2`.title_ft
     WHERE tconst = new_tconst;
+
+    -- Log DELETE to Main
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'DELETE', 'MAIN', NOW(6));
+
+    -- Create a savepoint before attempting federated operations
+    SAVEPOINT before_federated;
 
     -- Set flag to prevent triggers on federated nodes from logging
     SET @federated_operation = 1;
@@ -472,6 +475,11 @@ BEGIN
                        'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
             NULL, 'DELETE');
         CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+    END IF;
+
+    -- If federated operations failed, roll back to savepoint but keep Main delete
+    IF federated_error = 1 THEN
+        ROLLBACK TO SAVEPOINT before_federated;
     END IF;
 
     -- Clear federated flag
@@ -522,24 +530,6 @@ BEGIN
         SET federated_error = 1;
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
-    END;
-    
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        -- Log ABORT before rolling back
-        IF @current_transaction_id IS NOT NULL THEN
-            SET @current_log_sequence = IFNULL(@current_log_sequence, 0) + 1;
-            INSERT INTO transaction_log 
-            (transaction_id, log_sequence, log_type, source_node, timestamp)
-            VALUES (@current_transaction_id, @current_log_sequence, 'ABORT', 'MAIN', NOW(6));
-        END IF;
-        
-        -- Clear session variables
-        SET @current_transaction_id = NULL;
-        SET @current_log_sequence = NULL;
-        
-        ROLLBACK;
-        RESIGNAL;
     END;
 
     -- Validation AFTER all DECLARE statements

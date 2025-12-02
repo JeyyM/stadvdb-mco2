@@ -117,28 +117,43 @@ app.post('/api/titles/distributed-update', async (req, res) => {
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     
-    await db.query(sql, params);
-    res.json({ success: true, message: 'Updated successfully' });
+    try {
+      await db.query(sql, params);
+      res.json({ success: true, message: 'Updated successfully' });
+    } catch (procError) {
+      console.log('Procedure error caught:', {
+        errno: procError.errno,
+        code: procError.code,
+        message: procError.message,
+        sqlMessage: procError.sqlMessage
+      });
+      
+      // Check if it's a federated table error (node down)
+      // Error 1296 = ER_GET_ERRMSG (wrapper for federated errors)
+      const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
+                               procError.message?.includes('Can\'t connect to MySQL server') ||
+                               procError.message?.includes('FEDERATED') ||
+                               procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
+                               procError.errno === 1159 || procError.errno === 1189 ||
+                               procError.errno === 2013 || procError.errno === 2006;
+      
+      if (isFederatedError) {
+        console.warn('⚠️ Federated error during update (node offline). Recovery will sync later.');
+        // Even though procedure failed, Main DB may have been partially updated
+        // Return success to signal that recovery system will handle sync
+        return res.json({ 
+          success: true, 
+          message: 'Updated successfully (recovery will sync to offline nodes)',
+          warning: 'Some nodes offline - will sync on recovery'
+        });
+      }
+      
+      // Not a federated error, re-throw
+      throw procError;
+    }
     
   } catch (error) {
     console.error('Update Error:', error);
-    
-    // Check if it's a federated table error (node down, but Main operation succeeded)
-    const isFederatedError = error.message?.includes('Unable to connect to foreign data source') ||
-                             error.message?.includes('Can\'t connect to MySQL server') ||
-                             error.errno === 1429 || error.errno === 1158 || 
-                             error.errno === 1159 || error.errno === 1189 ||
-                             error.errno === 2013 || error.errno === 2006;
-    
-    if (isFederatedError) {
-      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
-      // Return success - Main DB was updated, federated replication will happen on recovery
-      return res.json({ 
-        success: true, 
-        message: 'Updated successfully (recovery will sync to offline nodes)',
-        warning: 'Some nodes offline - will sync on recovery'
-      });
-    }
     
     // Check if it's a connection error to Main
     const isConnectionError = error.code === 'ETIMEDOUT' || 
@@ -171,27 +186,34 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
     const sql = 'CALL distributed_delete(?)';
     const params = [tconst];
     
-    await db.query(sql, params);
-    res.json({ success: true, message: 'Deleted successfully' });
+    try {
+      await db.query(sql, params);
+      res.json({ success: true, message: 'Deleted successfully' });
+    } catch (procError) {
+      // Check if it's a federated table error (node down)
+      // Error 1296 = ER_GET_ERRMSG (wrapper for federated errors)
+      const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
+                               procError.message?.includes('Can\'t connect to MySQL server') ||
+                               procError.message?.includes('FEDERATED') ||
+                               procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
+                               procError.errno === 1159 || procError.errno === 1189 ||
+                               procError.errno === 2013 || procError.errno === 2006;
+      
+      if (isFederatedError) {
+        console.warn('⚠️ Federated error during delete (node offline). Recovery will sync later.');
+        return res.json({ 
+          success: true, 
+          message: 'Deleted successfully (recovery will sync to offline nodes)',
+          warning: 'Some nodes offline - will sync on recovery'
+        });
+      }
+      
+      // Not a federated error, re-throw
+      throw procError;
+    }
     
   } catch (error) {
     console.error('Delete Error:', error);
-    
-    // Check if it's a federated table error (node down, but Main operation succeeded)
-    const isFederatedError = error.message?.includes('Unable to connect to foreign data source') ||
-                             error.message?.includes('Can\'t connect to MySQL server') ||
-                             error.errno === 1429 || error.errno === 1158 || 
-                             error.errno === 1159 || error.errno === 1189 ||
-                             error.errno === 2013 || error.errno === 2006;
-    
-    if (isFederatedError) {
-      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
-      return res.json({ 
-        success: true, 
-        message: 'Deleted successfully (recovery will sync to offline nodes)',
-        warning: 'Some nodes offline - will sync on recovery'
-      });
-    }
     
     // Check if it's a connection error to Main
     const isConnectionError = error.code === 'ETIMEDOUT' || 
@@ -234,27 +256,34 @@ app.post('/api/titles/add-reviews', async (req, res) => {
     const sql = 'CALL distributed_addReviews(?, ?, ?)';
     const params = [tconst, newVotes, newRating]; // Order: tconst, num_new_reviews, new_rating
     
-    await db.query(sql, params);
-    res.json({ success: true, message: 'Reviews added successfully' });
+    try {
+      await db.query(sql, params);
+      res.json({ success: true, message: 'Reviews added successfully' });
+    } catch (procError) {
+      // Check if it's a federated table error (node down)
+      // Error 1296 = ER_GET_ERRMSG (wrapper for federated errors)
+      const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
+                               procError.message?.includes('Can\'t connect to MySQL server') ||
+                               procError.message?.includes('FEDERATED') ||
+                               procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
+                               procError.errno === 1159 || procError.errno === 1189 ||
+                               procError.errno === 2013 || procError.errno === 2006;
+      
+      if (isFederatedError) {
+        console.warn('⚠️ Federated error during add-reviews (node offline). Recovery will sync later.');
+        return res.json({ 
+          success: true, 
+          message: 'Reviews added successfully (recovery will sync to offline nodes)',
+          warning: 'Some nodes offline - will sync on recovery'
+        });
+      }
+      
+      // Not a federated error, re-throw
+      throw procError;
+    }
     
   } catch (error) {
     console.error('Add Reviews Error:', error);
-    
-    // Check if it's a federated table error (node down, but Main operation succeeded)
-    const isFederatedError = error.message?.includes('Unable to connect to foreign data source') ||
-                             error.message?.includes('Can\'t connect to MySQL server') ||
-                             error.errno === 1429 || error.errno === 1158 || 
-                             error.errno === 1159 || error.errno === 1189 ||
-                             error.errno === 2013 || error.errno === 2006;
-    
-    if (isFederatedError) {
-      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
-      return res.json({ 
-        success: true, 
-        message: 'Reviews added successfully (recovery will sync to offline nodes)',
-        warning: 'Some nodes offline - will sync on recovery'
-      });
-    }
     
     // Check if it's a connection error to Main
     const isConnectionError = error.code === 'ETIMEDOUT' || 
