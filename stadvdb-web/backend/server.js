@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
-// Use simple direct database connection//
 const db = require('./db');
 const recovery = require('./recovery');
 const failoverProxy = require('./failover-proxy');
@@ -9,8 +8,9 @@ const failoverProxy = require('./failover-proxy');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/// Middleware//
-// Updated CORS to allow Vercel deployments and all Render frontends
+// =======================================================================
+//  Middleware //
+//  Updated CORS to allow Vercel deployments and all Render frontends
 const corsOptions = {
   origin: [
     'http://localhost:3000',
@@ -20,7 +20,7 @@ const corsOptions = {
     'https://stadvdb-mco2-main-node.onrender.com',
     'https://stadvdb-mco2-a-node.onrender.com',
     'https://stadvdb-mco2-b-node.onrender.com',
-    /\.vercel\.app$/, // Allow all Vercel deployments
+    /\.vercel\.app$/,   // Allow all Vercel deployments
     /\.onrender\.com$/ // Allow all Render deployments
   ],
   credentials: true,
@@ -32,7 +32,7 @@ app.use(express.json());
 // RECOVERY BLOCKER: Block all requests during recovery
 app.use(async (req, res, next) => {
   if (recovery.isRecovering()) {
-    console.log(`🔒 Request blocked during recovery: ${req.method} ${req.path}`);
+    console.log(`Request blocked during recovery: ${req.method} ${req.path}`);
     return res.status(503).json({
       error: 'Service Unavailable',
       message: 'Server is currently recovering from failure. Please retry in a few seconds.',
@@ -42,7 +42,6 @@ app.use(async (req, res, next) => {
   next();
 });
 
-// Add debug headers to all responses
 app.use((req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
   res.set('X-Current-Node', currentNode);
@@ -50,16 +49,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware to force Node B to always proxy to coordinator (Main or Node A)
+// middleware to force Node B to always proxy to coordinator, which is either Main or Node A
 app.use('/api', (req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
   
-  // Node B ALWAYS proxies to Main/Node A (acts as simple client, not coordinator)
   if (currentNode === 'NODE_B') {
     return failoverProxy.forwardToMain(req, res, next);
   }
   
-  // Main and Node A use their own databases
   next();
 });
 
@@ -72,7 +69,6 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     
-    // Validate required fields
     if (!tconst || !primaryTitle || runtimeMinutes === undefined || averageRating === undefined || numVotes === undefined || startYear === undefined) {
       return res.status(400).json({ success: false, message: 'All fields are required' });
     }
@@ -86,7 +82,6 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
   } catch (error) {
     console.error('Insert Error:', error);
     
-    // Check if it's a connection error
     const isConnectionError = error.code === 'ETIMEDOUT' || 
                               error.code === 'ECONNREFUSED' ||
                               error.code === 'EHOSTUNREACH' ||
@@ -95,7 +90,6 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
-      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({ success: false, message: 'Insert Error - all nodes unavailable', error: error.message });
       });
@@ -105,7 +99,6 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
   }
 });
 
-// Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
@@ -123,7 +116,6 @@ app.post('/api/titles/distributed-update', async (req, res) => {
   } catch (error) {
     console.error('Update Error:', error);
     
-    // Check if it's a federated table error (node down, but Main operation succeeded)
     const isFederatedError = error.message?.includes('Unable to connect to foreign data source') ||
                              error.message?.includes('Can\'t connect to MySQL server') ||
                              error.errno === 1429 || error.errno === 1158 || 
@@ -131,8 +123,7 @@ app.post('/api/titles/distributed-update', async (req, res) => {
                              error.errno === 2013 || error.errno === 2006;
     
     if (isFederatedError) {
-      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
-      // Return success - Main DB was updated, federated replication will happen on recovery
+      console.warn('Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
       return res.json({ 
         success: true, 
         message: 'Updated successfully (recovery will sync to offline nodes)',
@@ -149,7 +140,6 @@ app.post('/api/titles/distributed-update', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
-      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({ success: false, message: 'Update Error - all nodes unavailable', error: error.message });
       });
@@ -177,7 +167,6 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
   } catch (error) {
     console.error('Delete Error:', error);
     
-    // Check if it's a federated table error (node down, but Main operation succeeded)
     const isFederatedError = error.message?.includes('Unable to connect to foreign data source') ||
                              error.message?.includes('Can\'t connect to MySQL server') ||
                              error.errno === 1429 || error.errno === 1158 || 
@@ -185,7 +174,7 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
                              error.errno === 2013 || error.errno === 2006;
     
     if (isFederatedError) {
-      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
+      console.warn('Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
       return res.json({ 
         success: true, 
         message: 'Deleted successfully (recovery will sync to offline nodes)',
@@ -193,7 +182,6 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
       });
     }
     
-    // Check if it's a connection error to Main
     const isConnectionError = error.code === 'ETIMEDOUT' || 
                               error.code === 'ECONNREFUSED' ||
                               error.code === 'EHOSTUNREACH' ||
@@ -202,7 +190,6 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
-      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({ success: false, message: 'Delete Error - all nodes unavailable', error: error.message });
       });
@@ -232,7 +219,7 @@ app.post('/api/titles/add-reviews', async (req, res) => {
     }
 
     const sql = 'CALL distributed_addReviews(?, ?, ?)';
-    const params = [tconst, newVotes, newRating]; // Order: tconst, num_new_reviews, new_rating
+    const params = [tconst, newVotes, newRating];
     
     await db.query(sql, params);
     res.json({ success: true, message: 'Reviews added successfully' });
@@ -240,7 +227,6 @@ app.post('/api/titles/add-reviews', async (req, res) => {
   } catch (error) {
     console.error('Add Reviews Error:', error);
     
-    // Check if it's a federated table error (node down, but Main operation succeeded)
     const isFederatedError = error.message?.includes('Unable to connect to foreign data source') ||
                              error.message?.includes('Can\'t connect to MySQL server') ||
                              error.errno === 1429 || error.errno === 1158 || 
@@ -248,7 +234,7 @@ app.post('/api/titles/add-reviews', async (req, res) => {
                              error.errno === 2013 || error.errno === 2006;
     
     if (isFederatedError) {
-      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
+      console.warn('Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
       return res.json({ 
         success: true, 
         message: 'Reviews added successfully (recovery will sync to offline nodes)',
@@ -256,7 +242,6 @@ app.post('/api/titles/add-reviews', async (req, res) => {
       });
     }
     
-    // Check if it's a connection error to Main
     const isConnectionError = error.code === 'ETIMEDOUT' || 
                               error.code === 'ECONNREFUSED' ||
                               error.code === 'EHOSTUNREACH' ||
@@ -265,7 +250,6 @@ app.post('/api/titles/add-reviews', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
-      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({ success: false, message: 'Add Reviews Error - all nodes unavailable', error: error.message });
       });
@@ -285,7 +269,6 @@ app.get('/api/titles/distributed-select', async (req, res) => {
     } catch (error) {
         console.error('Error in select:', error);
         
-        // Check if procedure doesn't exist (Node A/B) or connection error
         const procedureNotFound = error.code === 'ER_SP_DOES_NOT_EXIST' || 
                                   error.message?.includes('PROCEDURE') ||
                                   error.message?.includes('does not exist');
@@ -297,13 +280,11 @@ app.get('/api/titles/distributed-select', async (req, res) => {
                                   error.message?.includes('connect EHOSTUNREACH') ||
                                   error.message?.includes('Unable to connect to foreign data source');
         
-        // If procedure doesn't exist or connection error, use local select
         if (procedureNotFound || isConnectionError) {
           console.log('   Using local select (distributed procedure not available)');
           try {
             const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
             
-            // Validate inputs
             const validColumns = ['primaryTitle', 'numVotes', 'averageRating', 'weightedRating', 'startYear', 'tconst', 'runtimeMinutes'];
             const column = validColumns.includes(select_column) ? select_column : 'averageRating';
             const direction = order_direction === 'ASC' ? 'ASC' : 'DESC';
@@ -322,7 +303,6 @@ app.get('/api/titles/distributed-select', async (req, res) => {
             });
           } catch (localError) {
             console.error('Error in local select:', localError);
-            // Try proxying
             return failoverProxy.forwardToMain(req, res, () => {
               res.status(500).json({ message: 'Error in select', error: localError.message });
             });
@@ -346,7 +326,6 @@ app.get('/api/titles/distributed-search', async (req, res) => {
   } catch (error) {
     console.error('Error in distributed_search:', error);
     
-    // Check if it's a connection error
     const isConnectionError = error.code === 'ETIMEDOUT' || 
                               error.code === 'ECONNREFUSED' ||
                               error.code === 'EHOSTUNREACH' ||
@@ -355,7 +334,6 @@ app.get('/api/titles/distributed-search', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
-      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({
           success: false,
@@ -375,12 +353,10 @@ app.get('/api/titles/distributed-search', async (req, res) => {
 
 // Aggregation Route
 app.get('/api/aggregation', async (req, res) => {
-  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
   const proxyTarget = await failoverProxy.getProxyTarget();
   if (proxyTarget) {
-    console.log(`🔄 Proactively proxying /api/aggregation to ${proxyTarget.name}`);
+    console.log(`Proactively proxying /api/aggregation to ${proxyTarget.name}`);
     return failoverProxy.forwardToMain(req, res, () => {
-      // Fallback if proxy fails
       res.status(500).json({
         success: false,
         message: 'Error fetching aggregations - all nodes unavailable'
@@ -389,7 +365,6 @@ app.get('/api/aggregation', async (req, res) => {
   }
   
   try {
-    // Try to call distributed_aggregation if it exists (Main node)
     const [results] = await db.query('CALL distributed_aggregation()', []);
     let agg = results[0] && results[0][0] ? results[0][0] : null;
     if (agg) {
@@ -400,7 +375,6 @@ app.get('/api/aggregation', async (req, res) => {
       agg.average_votes = agg.average_votes !== null ? Number(agg.average_votes) : null;
     }
     
-    // Add debug info to response
     const currentNode = failoverProxy.getCurrentNode();
     res.set('X-Data-Source', 'distributed_aggregation');
     res.set('X-Served-By', currentNode);
@@ -418,7 +392,6 @@ app.get('/api/aggregation', async (req, res) => {
   } catch (error) {
     console.error('Error fetching aggregations:', error);
     
-    // Check if procedure doesn't exist (Node A/B) or connection error
     const procedureNotFound = error.code === 'ER_SP_DOES_NOT_EXIST' || 
                               error.message?.includes('PROCEDURE') ||
                               error.message?.includes('does not exist');
@@ -428,7 +401,6 @@ app.get('/api/aggregation', async (req, res) => {
                               error.message?.includes('connect ECONNREFUSED') ||
                               error.message?.includes('Unable to connect to foreign data source');
     
-    // If procedure doesn't exist or connection error, use local aggregation
     if (procedureNotFound || isConnectionError) {
       console.log('   Using local aggregation (distributed procedure not available)');
       try {
@@ -458,7 +430,6 @@ app.get('/api/aggregation', async (req, res) => {
         });
       } catch (localError) {
         console.error('Error in local aggregation:', localError);
-        // If local also fails, try proxying to another node
         return failoverProxy.forwardToMain(req, res, () => {
           res.status(500).json({
             success: false,
@@ -570,8 +541,6 @@ app.get('/api/test', (req, res) => {
 
 // ============================================================================
 // RECOVERY API ENDPOINTS
-// ============================================================================
-
 // Manual recovery trigger for Node A
 app.post('/api/recovery/node-a', async (req, res) => {
   try {
@@ -629,14 +598,12 @@ app.get('/api/recovery/status', (req, res) => {
 
 // ============================================================================
 // ERROR HANDLERS
-// ============================================================================
-
-// Database error handler - catches connection errors and proxies to Main
+// Database error handler: this catches connection errors and proxies to Main
 app.use(failoverProxy.handleDatabaseError);
 
 // Generic error handler
 app.use((error, req, res, next) => {
-  console.error('❌ Unhandled error:', error);
+  console.error('Unhandled error:', error);
   res.status(500).json({
     success: false,
     message: 'Internal server error',
@@ -646,7 +613,6 @@ app.use((error, req, res, next) => {
 
 // ============================================================================
 // START SERVER
-// ============================================================================
 
 app.listen(PORT, async () => {
   const DB_NAME = process.env.DB_NAME || 'stadvdb-mco2';
@@ -654,19 +620,18 @@ app.listen(PORT, async () => {
                     DB_NAME === 'stadvdb-mco2-a' ? 'NODE_A' : 
                     DB_NAME === 'stadvdb-mco2-b' ? 'NODE_B' : 'MAIN';
   
-  console.log(`🚀 Server is running on http://localhost:${PORT}`);
-  console.log(`📊 API endpoints available at http://localhost:${PORT}/api`);
-  console.log(`🔧 Node type: ${NODE_TYPE}`);
-  console.log(`🔄 Failover to Main: ${NODE_TYPE !== 'MAIN' ? 'ENABLED' : 'N/A (this is Main)'}`);
+  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`API endpoints available at http://localhost:${PORT}/api`);
+  console.log(`Node type: ${NODE_TYPE}`);
+  console.log(`Failover to Main: ${NODE_TYPE !== 'MAIN' ? 'ENABLED' : 'N/A (this is Main)'}`);
   
-  // Run automatic recovery check on startup ONLY
-  // (Periodic recovery disabled - recovery only runs on wake up)
+  // Run automatic recovery check on startup ONLYYY
   try {
     await recovery.runStartupRecovery();
   } catch (error) {
-    console.error('❌ Error during startup recovery:', error.message);
-    console.error('⚠️ Server will continue running, but recovery may be incomplete');
+    console.error('Error during startup recovery:', error.message);
+    console.error('Server will continue running, but recovery may be incomplete');
   }
   
-  console.log('✅ Recovery mode: STARTUP ONLY (periodic checks disabled)');
+  console.log('Recovery mode: STARTUP ONLY (periodic checks disabled)');
 });

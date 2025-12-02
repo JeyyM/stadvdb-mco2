@@ -10,7 +10,6 @@ function App() {
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState(null);
   const [editSuccess, setEditSuccess] = useState(null);
-
   const [aggregations, setAggregations] = useState(null);
   const [loadingAggregations, setLoadingAggregations] = useState(true);
   const [aggError, setAggError] = useState(null);
@@ -59,7 +58,6 @@ function App() {
           setShowEditPopup(false);
           setEditRow(null);
           setEditSuccess(null);
-          // Refresh all data
           if (hasSearched) {
             handleSearch({ preventDefault: () => {} });
           }
@@ -70,7 +68,7 @@ function App() {
         }, 800);
       } else {
         const errorMsg = data.message || data.error || 'Delete failed';
-        console.error('❌ Delete Error:', {
+        console.error('Delete Error:', {
           operation: 'DELETE',
           tconst: editForm.tconst,
           error: errorMsg,
@@ -80,7 +78,7 @@ function App() {
         setEditError(`Delete Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Delete Exception:', {
+      console.error('Delete Exception:', {
         operation: 'DELETE',
         tconst: editForm.tconst,
         error: err.message,
@@ -95,8 +93,6 @@ function App() {
 
   const handleAddReviews = async (e) => {
     e.preventDefault();
-    
-    // Validation
     if (!reviewForm.newRating || reviewForm.newRating.trim() === '') {
       setReviewError('Rating is required');
       return;
@@ -141,7 +137,6 @@ function App() {
           setShowEditPopup(false);
           setEditRow(null);
           setReviewSuccess(null);
-          // Refresh all data
           if (hasSearched) {
             handleSearch({ preventDefault: () => {} });
           }
@@ -152,7 +147,7 @@ function App() {
         }, 1000);
       } else {
         const errorMsg = data.message || data.error || 'Failed to add reviews';
-        console.error('❌ Add Reviews Error:', {
+        console.error('Add Reviews Error:', {
           operation: 'ADD_REVIEWS',
           tconst: editForm.tconst,
           newRating: rating,
@@ -164,7 +159,7 @@ function App() {
         setReviewError(`Add Reviews Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Add Reviews Exception:', {
+      console.error('Add Reviews Exception:', {
         operation: 'ADD_REVIEWS',
         tconst: editForm.tconst,
         newRating: rating,
@@ -257,7 +252,7 @@ function App() {
         }, 1000);
       } else {
         const errorMsg = data.message || data.error || (editRow ? 'Update failed' : 'Insert failed');
-        console.error('❌ Server Error:', {
+        console.error('Server Error:', {
           operation: editRow ? 'UPDATE' : 'INSERT',
           error: errorMsg,
           fullResponse: data,
@@ -266,13 +261,12 @@ function App() {
         setEditError(`Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Edit/Insert error:', {
+      console.error('Edit/Insert error:', {
         operation: editRow ? 'UPDATE' : 'INSERT',
         error: err.message,
         stack: err.stack,
         timestamp: new Date().toISOString()
       });
-      // Try to extract meaningful error message
       const errorMessage = err.message || (editRow ? 'Update failed' : 'Insert failed');
       setEditError(`Error: ${errorMessage}`);
     } finally {
@@ -292,10 +286,8 @@ function App() {
 
   useEffect(() => {
     fetchAggregations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update page title based on connected node
   useEffect(() => {
     const nodeName = getNodeName();
     document.title = `Distributed IMDB - ${nodeName}`;
@@ -311,7 +303,7 @@ function App() {
           setAggregations(data.data);
         } else {
           const errorMsg = data.message || data.error || 'Failed to load statistics';
-          console.error('❌ Aggregation Error:', {
+          console.error('Aggregation Error:', {
             operation: 'AGGREGATION',
             error: errorMsg,
             fullResponse: data,
@@ -322,7 +314,7 @@ function App() {
         setLoadingAggregations(false);
       })
       .catch((error) => {
-        console.error('❌ Aggregation Exception:', {
+        console.error('Aggregation Exception:', {
           operation: 'AGGREGATION',
           error: error.message,
           stack: error.stack,
@@ -335,8 +327,6 @@ function App() {
 
   const handleSearch = async (e) => {
     e.preventDefault();
-    
-    // Validation checks
     if (!searchTerm || searchTerm.trim() === '') {
       setError('Please enter a search term');
       return;
@@ -374,7 +364,7 @@ function App() {
         setResults(data.data);
       } else {
         const errorMsg = data.message || 'Search failed';
-        console.error('❌ Search Error:', {
+        console.error('Search Error:', {
           operation: 'SEARCH',
           searchTerm,
           limit,
@@ -385,7 +375,7 @@ function App() {
         setError(`Search Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Search Exception:', {
+      console.error('Search Exception:', {
         operation: 'SEARCH',
         searchTerm,
         limit,
@@ -401,8 +391,6 @@ function App() {
 
   const handleSelect = async (e) => {
     e.preventDefault();
-    
-    // Validation checks
     if (!selectColumn || selectColumn.trim() === '') {
       setSelectError('Please select a column');
       return;
@@ -433,7 +421,7 @@ function App() {
         setSelectResults(data.data);
       } else {
         const errorMsg = data.message || 'Select failed';
-        console.error('❌ Select Error:', {
+        console.error('Select Error:', {
           operation: 'SELECT',
           selectColumn,
           orderDirection,
@@ -445,7 +433,7 @@ function App() {
         setSelectError(`Select Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('❌ Select Exception:', {
+      console.error('Select Exception:', {
         operation: 'SELECT',
         selectColumn,
         orderDirection,
@@ -460,14 +448,11 @@ function App() {
     }
   };
 
-  // Determine which node we're connected to based on the API URL port or domain
   const getNodeName = () => {
     const apiUrl = process.env.REACT_APP_API_URL || '';
-    // Check for localhost ports
     if (apiUrl.includes(':60751')) return 'Main Node';
     if (apiUrl.includes(':60752')) return 'Node A';
     if (apiUrl.includes(':60753')) return 'Node B';
-    // Check for Render URLs
     if (apiUrl.includes('stadvdb-mco2-main')) return 'Main Node';
     if (apiUrl.includes('stadvdb-mco2-node-a') || apiUrl.includes('stadvdb-mco2-a')) return 'Node A';
     if (apiUrl.includes('stadvdb-mco2-node-b') || apiUrl.includes('stadvdb-mco2-b')) return 'Node B';

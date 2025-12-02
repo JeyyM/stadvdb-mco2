@@ -1,5 +1,4 @@
-// Kill any process using port 5000
-const { execSync } = require('child_process');
+const { execSync } = require('child_process');  // Kill any process using port 5000
 
 try {
   // Try to find and kill process on port 5000
@@ -11,6 +10,5 @@ try {
   execSync(command, { stdio: 'ignore' });
   console.log('Cleared port 5000');
 } catch (error) {
-  // Port is already free or no process found
-  console.log('Port 5000 is available');
+  console.log('Port 5000 is available');    // Port is already free or no process found
 }
