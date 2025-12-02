@@ -305,9 +305,6 @@ CREATE PROCEDURE distributed_insert(
     IN new_startYear SMALLINT UNSIGNED
 )
 BEGIN
-    DECLARE global_mean DECIMAL(3,1);
-    DECLARE min_votes_threshold INT;
-    DECLARE calculated_weightedRating DECIMAL(4,2);
     DECLARE federated_error INT DEFAULT 0;
     DECLARE result_message VARCHAR(500);
     
@@ -316,98 +313,56 @@ BEGIN
         SET federated_error = 1;
     END;
 
-    -- Calculate global mean from combined data
-    SELECT AVG(averageRating) INTO global_mean
-    FROM (
-        SELECT averageRating FROM title_ft WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-        UNION ALL
-        SELECT averageRating FROM title_ft_node_b WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-    ) AS combined;
-
-    -- Calculate threshold
-    SET @percentile := 0.95;
-    SELECT COUNT(*) INTO @totalCount
-    FROM (
-        SELECT numVotes FROM title_ft WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-        UNION ALL
-        SELECT numVotes FROM title_ft_node_b WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-    ) AS combined;
-    
-    SET @rank_position := CEIL(@percentile * @totalCount);
-    SET @rank_position := GREATEST(@rank_position, 1);
-    
-    SELECT numVotes INTO min_votes_threshold
-    FROM (
-        SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
-        FROM (
-            SELECT numVotes FROM title_ft WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-            UNION ALL
-            SELECT numVotes FROM title_ft_node_b WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
-        ) AS all_votes
-    ) AS ordered_votes
-    WHERE row_num = @rank_position
-    LIMIT 1;
-
-    IF new_numVotes IS NULL OR new_numVotes = 0 THEN
-        SET calculated_weightedRating = global_mean;
-    ELSE
-        SET calculated_weightedRating = ROUND(
-            (new_numVotes / (new_numVotes + min_votes_threshold)) * new_averageRating
-            + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
-        );
-    END IF;
-
     -- PHASE 1: Insert to appropriate node based on startYear (guaranteed)
+    -- Use the provided averageRating as weightedRating (no complex calculation)
     IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
         -- Insert to Node A (local)
         START TRANSACTION;
         INSERT INTO title_ft
         (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, weightedRating)
         VALUES
-        (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
+        (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, new_averageRating);
         
-        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
-        VALUES (UUID(), 'COMMIT', 'INSERT', new_tconst, 
+        INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, new_value, timestamp, source_node)
+        VALUES (UUID(), 1, 'COMMIT', 'INSERT', new_tconst, 
                 JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes, 
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', calculated_weightedRating),
-                NOW(6));
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', new_averageRating),
+                NOW(6), 'NODE_A');
         COMMIT;
     ELSE
         -- Insert to Node B (local)
         START TRANSACTION;
         INSERT INTO title_ft_node_b
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_averageRating, new_startYear);
         
-        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
-        VALUES (UUID(), 'COMMIT', 'INSERT', new_tconst, 
+        INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, new_value, timestamp, source_node)
+        VALUES (UUID(), 1, 'COMMIT', 'INSERT', new_tconst, 
                 JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes, 
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', calculated_weightedRating),
-                NOW(6));
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', new_averageRating),
+                NOW(6), 'NODE_A');
         COMMIT;
     END IF;
 
-    -- PHASE 2: Attempt replication to Main (best effort, with timeout handling)
+    -- PHASE 2: Attempt replication to Main (best effort, non-blocking)
+    -- This is best-effort and should NOT fail the entire procedure if Main is down
     SET federated_error = 0;
     
-    -- Set a short timeout for the federated insert (30 seconds max)
-    SET SESSION max_execution_time = 30000;
-    
-    START TRANSACTION;
     BEGIN
-        -- Catch federated errors AND timeout errors (1317 = Query execution was interrupted)
-        DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430, 1317, 3024
+        DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430, 1317, 3024, SQLEXCEPTION
         BEGIN
             SET federated_error = 1;
-            ROLLBACK;
         END;
         
+        -- Set a short timeout (10 seconds max)
+        SET SESSION max_execution_time = 10000;
+        
+        START TRANSACTION;
         INSERT INTO title_ft_main
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_averageRating, new_startYear);
         COMMIT;
+        
+        SET SESSION max_execution_time = 0;
     END;
-    
-    -- Reset timeout
-    SET SESSION max_execution_time = 0;
     
     -- Set result message (only ONE SELECT at the end)
     IF federated_error = 0 THEN
@@ -575,8 +530,8 @@ BEGIN
         
         DELETE FROM title_ft WHERE tconst = new_tconst;
         
-        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, old_value, timestamp)
-        VALUES (UUID(), 'COMMIT', 'DELETE', new_tconst, old_value_json, NOW(6));
+        INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, old_value, timestamp, source_node)
+        VALUES (UUID(), 1, 'COMMIT', 'DELETE', new_tconst, old_value_json, NOW(6), 'NODE_A');
         COMMIT;
     ELSE
         -- Delete from Node B (federated)
@@ -586,8 +541,8 @@ BEGIN
         
         DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
         
-        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, old_value, timestamp)
-        VALUES (UUID(), 'COMMIT', 'DELETE', new_tconst, old_value_json, NOW(6));
+        INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, old_value, timestamp, source_node)
+        VALUES (UUID(), 1, 'COMMIT', 'DELETE', new_tconst, old_value_json, NOW(6), 'NODE_A');
         COMMIT;
     END IF;
 
@@ -722,10 +677,10 @@ BEGIN
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
         
-        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
-        VALUES (UUID(), 'COMMIT', 'UPDATE', new_tconst, 
+        INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, new_value, timestamp, source_node)
+        VALUES (UUID(), 1, 'COMMIT', 'UPDATE', new_tconst, 
                 JSON_OBJECT('tconst', new_tconst, 'numVotes', updated_numVotes, 'averageRating', updated_averageRating, 'weightedRating', updated_weightedRating),
-                NOW(6));
+                NOW(6), 'NODE_A');
         COMMIT;
     ELSE
         -- Update in Node B (federated)
@@ -736,10 +691,10 @@ BEGIN
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
         
-        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
-        VALUES (UUID(), 'COMMIT', 'UPDATE', new_tconst, 
+        INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, new_value, timestamp, source_node)
+        VALUES (UUID(), 1, 'COMMIT', 'UPDATE', new_tconst, 
                 JSON_OBJECT('tconst', new_tconst, 'numVotes', updated_numVotes, 'averageRating', updated_averageRating, 'weightedRating', updated_weightedRating),
-                NOW(6));
+                NOW(6), 'NODE_A');
         COMMIT;
     END IF;
 

@@ -87,6 +87,10 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     
     try {
+      // Check if local DB is reachable first
+      await db.query('SELECT 1');
+      
+      // If we get here, DB is reachable - proceed with insert
       await db.query(sql, params);
       res.json({ success: true, message: 'Inserted successfully' });
     } catch (procError) {
@@ -96,6 +100,21 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
         message: procError.message,
         sqlMessage: procError.sqlMessage
       });
+      
+      // Check if it's a connection error FIRST
+      const isConnectionError = procError.code === 'ETIMEDOUT' || 
+                                procError.code === 'ECONNREFUSED' ||
+                                procError.code === 'EHOSTUNREACH' ||
+                                procError.message?.includes('connect ETIMEDOUT') || 
+                                procError.message?.includes('connect ECONNREFUSED') ||
+                                procError.message?.includes('connect EHOSTUNREACH');
+      
+      if (isConnectionError) {
+        console.log('Connection error detected, proxying to Node A');
+        return failoverProxy.forwardToMain(req, res, () => {
+          res.status(500).json({ success: false, message: 'Insert Error - all nodes unavailable', error: procError.message });
+        });
+      }
       
       // Always rollback to clean up any uncommitted transaction
       try {
@@ -146,6 +165,7 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     
     if (isConnectionError) {
       // Try to proxy to another node
+      console.log('Outer catch: Connection error, proxying to Node A');
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({ success: false, message: 'Insert Error - all nodes unavailable', error: error.message });
       });
