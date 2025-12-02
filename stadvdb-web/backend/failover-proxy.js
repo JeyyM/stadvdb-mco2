@@ -55,11 +55,14 @@ function isConnectionError(error) {
     error?.code === 'ECONNREFUSED' ||
     error?.code === 'ETIMEDOUT' ||
     error?.code === 'ENOTFOUND' ||
+    error?.code === 'EHOSTUNREACH' ||  // Added this!
     error?.errno === 'ECONNREFUSED' ||
+    error?.errno === 'EHOSTUNREACH' ||  // Added this!
     error?.sqlState === 'HY000' ||
     (typeof error?.message === 'string' &&
       (error.message.includes('connect ETIMEDOUT') ||
-        error.message.includes('connect ECONNREFUSED')))
+        error.message.includes('connect ECONNREFUSED') ||
+        error.message.includes('connect EHOSTUNREACH')))  // Added this!
   );
 }
 
@@ -249,7 +252,23 @@ async function forwardToMain(req, res, next) {
     }
 
     console.log(`   ✅ Proxy success: ${response.status} from ${proxyTarget.name}`);
-    return res.status(response.status).json(response.data);
+    
+    // Add debug headers AND inject debug info into response body
+    res.set('X-Proxied-From', CURRENT_NODE);
+    res.set('X-Proxied-To', proxyTarget.name);
+    res.set('X-Proxy-Success', 'true');
+    
+    // Inject debug info into response data
+    const responseData = response.data;
+    if (typeof responseData === 'object' && responseData !== null) {
+      responseData._debug = {
+        proxiedFrom: CURRENT_NODE,
+        proxiedTo: proxyTarget.name,
+        proxySuccess: true
+      };
+    }
+    
+    return res.status(response.status).json(responseData);
   } catch (error) {
     console.error(`❌ Error proxying to ${proxyTarget.name}:`, error.message);
 
@@ -293,7 +312,25 @@ async function forwardToMain(req, res, next) {
         }
 
         console.log(`   ✅ Retry success: ${response.status} from ${backupTarget.name}`);
-        return res.status(response.status).json(response.data);
+        
+        // Add debug headers AND inject debug info into response body for retry
+        res.set('X-Proxied-From', CURRENT_NODE);
+        res.set('X-Proxied-To', backupTarget.name);
+        res.set('X-Proxy-Retry', 'true');
+        res.set('X-Original-Target-Failed', proxyTarget.name);
+        
+        // Inject retry debug info into response data
+        const responseData = response.data;
+        if (typeof responseData === 'object' && responseData !== null) {
+          responseData._debug = {
+            proxiedFrom: CURRENT_NODE,
+            proxiedTo: backupTarget.name,
+            proxyRetry: true,
+            originalTargetFailed: proxyTarget.name
+          };
+        }
+        
+        return res.status(response.status).json(responseData);
       } catch (backupError) {
         console.error(
           `❌ Retry to ${backupTarget.name} also failed:`,
@@ -315,6 +352,10 @@ async function forwardToMain(req, res, next) {
       console.log(
         `⚠️ All remote nodes down or unreachable, falling back to local ${CURRENT_NODE} data`
       );
+      // Add debug header for local fallback
+      res.set('X-Fallback-Mode', 'local');
+      res.set('X-Current-Node', CURRENT_NODE);
+      res.set('X-Remote-Nodes-Down', 'true');
       return next();
     }
 
@@ -323,7 +364,16 @@ async function forwardToMain(req, res, next) {
       success: false,
       message: 'Service temporarily unavailable - all nodes unreachable',
       error: error.message,
-      node: CURRENT_NODE
+      node: CURRENT_NODE,
+      debug: {
+        currentNode: CURRENT_NODE,
+        attemptedProxy: proxyTarget.name,
+        backupAttempted: backupTarget ? backupTarget.name : 'none',
+        localDbHealthy: dbHealthy,
+        mainNodeHealthy,
+        nodeAHealthy,
+        nodeBHealthy
+      }
     });
   }
 }
