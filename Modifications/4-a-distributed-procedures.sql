@@ -401,7 +401,7 @@ BEGIN
     END;
 
     -- Check if record exists in Node A
-    SELECT COUNT(*) > 0, startYear INTO found_in_a, old_startYear
+    SELECT COUNT(*) > 0, MAX(startYear) INTO found_in_a, old_startYear
     FROM title_ft
     WHERE tconst = new_tconst;
 

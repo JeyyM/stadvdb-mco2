@@ -227,9 +227,12 @@ app.get('/api/titles/distributed-select', async (req, res) => {
         const procedureNotFound = error.code === 'ER_SP_DOES_NOT_EXIST' || 
                                   error.message?.includes('PROCEDURE') ||
                                   error.message?.includes('does not exist');
-        const isConnectionError = error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || 
+        const isConnectionError = error.code === 'ETIMEDOUT' || 
+                                  error.code === 'ECONNREFUSED' ||
+                                  error.code === 'EHOSTUNREACH' ||
                                   error.message?.includes('connect ETIMEDOUT') || 
                                   error.message?.includes('connect ECONNREFUSED') ||
+                                  error.message?.includes('connect EHOSTUNREACH') ||
                                   error.message?.includes('Unable to connect to foreign data source');
         
         // If procedure doesn't exist or connection error, use local select
