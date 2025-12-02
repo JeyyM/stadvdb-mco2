@@ -26,9 +26,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Failover proxy middleware - automatically forwards to Main when local DB is down
-app.use('/api', failoverProxy.forwardToMain);
-
 // ============================================================================
 // API ROUTES
 
@@ -136,6 +133,19 @@ app.get('/api/titles/distributed-select', async (req, res) => {
         const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
         res.json({ success: true, count: results[0]?.length || 0, data: results[0] || [] });
     } catch (error) {
+        console.error('Error in select:', error);
+        
+        // Check if it's a connection error - proxy to Main
+        const isConnectionError = error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || 
+                                  error.message?.includes('connect ETIMEDOUT') || 
+                                  error.message?.includes('connect ECONNREFUSED');
+        
+        if (isConnectionError) {
+          return failoverProxy.forwardToMain(req, res, () => {
+            res.status(500).json({ message: 'Error in select', error: error.message });
+          });
+        }
+        
         res.status(500).json({ message: 'Error in select', error: error.message });
     }
 });
@@ -179,6 +189,22 @@ app.get('/api/aggregation', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching aggregations:', error);
+    
+    // Check if it's a connection error and we're not Main
+    const isConnectionError = error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || 
+                              error.message?.includes('connect ETIMEDOUT') || 
+                              error.message?.includes('connect ECONNREFUSED');
+    
+    if (isConnectionError) {
+      return failoverProxy.forwardToMain(req, res, () => {
+        res.status(500).json({
+          success: false,
+          message: 'Error fetching aggregations',
+          error: error.message
+        });
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error fetching aggregations',
