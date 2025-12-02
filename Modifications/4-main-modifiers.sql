@@ -204,12 +204,6 @@ BEGIN
         -- Recovery system will sync when nodes come back online
     END;
 
-    -- Set short timeout for federated operations (5 seconds)
-    -- This prevents hanging when remote nodes are unreachable
-    SET SESSION connect_timeout = 5;
-    SET SESSION read_timeout = 5;
-    SET SESSION write_timeout = 5;
-
     -- Initialize transaction logging
     SET current_transaction_id = UUID();
     SET @current_transaction_id = current_transaction_id;

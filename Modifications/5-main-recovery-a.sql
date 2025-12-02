@@ -43,6 +43,7 @@ BEGIN
     WHERE node_name = 'node_a';
     
     -- Find committed transactions in Main's log for Node A partition
+    -- Query MODIFY rows (which have actual data), not COMMIT rows (which have NULL values)
     SELECT 
         tm.transaction_id,
         tm.timestamp,
@@ -52,13 +53,13 @@ BEGIN
         tm.old_value,
         tm.table_name
     FROM transaction_log tm
-    WHERE tm.log_type = 'COMMIT'
+    WHERE tm.log_type = 'MODIFY'
       AND tm.timestamp > checkpoint_time
       AND tm.operation_type IS NOT NULL
       AND (
-          (tm.operation_type = 'INSERT' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
-          OR (tm.operation_type = 'UPDATE' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
-          OR (tm.operation_type = 'DELETE' AND JSON_EXTRACT(tm.old_value, '$.startYear') >= 2025)
+          (tm.operation_type = 'INSERT' AND tm.new_value IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(tm.new_value, '$.startYear')) AS UNSIGNED) >= 2025)
+          OR (tm.operation_type = 'UPDATE' AND tm.new_value IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(tm.new_value, '$.startYear')) AS UNSIGNED) >= 2025)
+          OR (tm.operation_type = 'DELETE' AND tm.old_value IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(tm.old_value, '$.startYear')) AS UNSIGNED) >= 2025)
       )
     ORDER BY tm.timestamp ASC;
 END$$
@@ -164,11 +165,8 @@ BEGIN
         SELECT '❌ Recovery failed - transaction rolled back' AS result;
     END;
     
-    -- Get last checkpoint
-    SELECT GREATEST(IFNULL(last_recovery_timestamp, '2000-01-01'), since_timestamp)
-    INTO checkpoint_time
-    FROM recovery_checkpoint
-    WHERE node_name = 'node_a';
+    -- Use the provided since_timestamp as the checkpoint (override saved checkpoint)
+    SET checkpoint_time = since_timestamp;
     
     SELECT CONCAT('🔄 Starting recovery for Node A from checkpoint: ', checkpoint_time) AS status;
     
@@ -179,22 +177,25 @@ BEGIN
     BEGIN
         DECLARE cur CURSOR FOR
             SELECT 
-                tm.operation_type,
-                tm.new_value,
-                tm.old_value,
-                tm.record_id,
-                tm.transaction_id,
-                tm.timestamp
+                COALESCE(tm.operation_type, prev_tm.operation_type) AS operation_type,
+                COALESCE(tm.new_value, prev_tm.new_value) AS new_value,
+                COALESCE(tm.old_value, prev_tm.old_value) AS old_value,
+                COALESCE(tm.record_id, prev_tm.record_id) AS record_id,
+                COALESCE(tm.transaction_id, prev_tm.transaction_id) AS transaction_id,
+                COALESCE(tm.timestamp, prev_tm.timestamp) AS timestamp
             FROM transaction_log tm
-            WHERE tm.log_type = 'COMMIT'
+            LEFT JOIN transaction_log prev_tm 
+                ON tm.transaction_id = prev_tm.transaction_id 
+                AND tm.log_sequence = prev_tm.log_sequence + 1
+                AND prev_tm.new_value IS NOT NULL
+            WHERE tm.log_type = 'MODIFY'
               AND tm.timestamp > checkpoint_time
-              AND tm.operation_type IS NOT NULL
               AND (
-                  (tm.operation_type = 'INSERT' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
-                  OR (tm.operation_type = 'UPDATE' AND JSON_EXTRACT(tm.new_value, '$.startYear') >= 2025)
-                  OR (tm.operation_type = 'DELETE' AND JSON_EXTRACT(tm.old_value, '$.startYear') >= 2025)
+                  (COALESCE(tm.operation_type, prev_tm.operation_type) = 'INSERT' AND COALESCE(tm.new_value, prev_tm.new_value) IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(COALESCE(tm.new_value, prev_tm.new_value), '$.startYear')) AS UNSIGNED) >= 2025)
+                  OR (COALESCE(tm.operation_type, prev_tm.operation_type) = 'UPDATE' AND COALESCE(tm.new_value, prev_tm.new_value) IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(COALESCE(tm.new_value, prev_tm.new_value), '$.startYear')) AS UNSIGNED) >= 2025)
+                  OR (COALESCE(tm.operation_type, prev_tm.operation_type) = 'DELETE' AND COALESCE(tm.old_value, prev_tm.old_value) IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(COALESCE(tm.old_value, prev_tm.old_value), '$.startYear')) AS UNSIGNED) >= 2025)
               )
-            ORDER BY tm.timestamp ASC;
+            ORDER BY COALESCE(tm.timestamp, prev_tm.timestamp) ASC;
         
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
         
