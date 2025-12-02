@@ -26,14 +26,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Add debug headers to all responses
-app.use((req, res, next) => {
-  const currentNode = failoverProxy.getCurrentNode();
-  res.set('X-Current-Node', currentNode);
-  res.set('X-DB-Healthy', failoverProxy.isDatabaseHealthy() ? 'true' : 'false');
-  next();
-});
-
 // Middleware to force Node B to always proxy to coordinator (Main or Node A)
 app.use('/api', (req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
@@ -53,18 +45,6 @@ app.use('/api', (req, res, next) => {
 // DISTRIBUTED TRANSACTIONS
 // Distributed insert system
 app.post('/api/titles/distributed-insert', async (req, res) => {
-  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
-  const proxyTarget = await failoverProxy.getProxyTarget();
-  if (proxyTarget) {
-    console.log(`🔄 Proactively proxying /api/titles/distributed-insert to ${proxyTarget.name}`);
-    return failoverProxy.forwardToMain(req, res, () => {
-      res.status(500).json({
-        success: false,
-        message: 'Insert Error - all nodes unavailable'
-      });
-    });
-  }
-  
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     
@@ -87,18 +67,6 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 
 // Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
-  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
-  const proxyTarget = await failoverProxy.getProxyTarget();
-  if (proxyTarget) {
-    console.log(`🔄 Proactively proxying /api/titles/distributed-update to ${proxyTarget.name}`);
-    return failoverProxy.forwardToMain(req, res, () => {
-      res.status(500).json({
-        success: false,
-        message: 'Update Error - all nodes unavailable'
-      });
-    });
-  }
-  
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     
@@ -120,18 +88,6 @@ app.post('/api/titles/distributed-update', async (req, res) => {
 
 // Distributed delete system
 app.post('/api/titles/distributed-delete', async (req, res) => {
-  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
-  const proxyTarget = await failoverProxy.getProxyTarget();
-  if (proxyTarget) {
-    console.log(`🔄 Proactively proxying /api/titles/distributed-delete to ${proxyTarget.name}`);
-    return failoverProxy.forwardToMain(req, res, () => {
-      res.status(500).json({
-        success: false,
-        message: 'Delete Error - all nodes unavailable'
-      });
-    });
-  }
-  
   try {
     const { tconst } = req.body;
     
@@ -153,18 +109,6 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
 
 // Add reviews system
 app.post('/api/titles/add-reviews', async (req, res) => {
-  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
-  const proxyTarget = await failoverProxy.getProxyTarget();
-  if (proxyTarget) {
-    console.log(`🔄 Proactively proxying /api/titles/add-reviews to ${proxyTarget.name}`);
-    return failoverProxy.forwardToMain(req, res, () => {
-      res.status(500).json({
-        success: false,
-        message: 'Add Reviews Error - all nodes unavailable'
-      });
-    });
-  }
-  
   try {
     const { tconst, newRating, newVotes } = req.body;
     
@@ -197,18 +141,6 @@ app.post('/api/titles/add-reviews', async (req, res) => {
 // READ-ONLY ROUTES
 // Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
-    // Check if we should proxy first (Main with DB down, or always-proxy nodes)
-    const proxyTarget = await failoverProxy.getProxyTarget();
-    if (proxyTarget) {
-        console.log(`🔄 Proactively proxying /api/titles/distributed-select to ${proxyTarget.name}`);
-        return failoverProxy.forwardToMain(req, res, () => {
-            res.status(500).json({
-                success: false,
-                message: 'Error in select - all nodes unavailable'
-            });
-        });
-    }
-    
     try {
         const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
         const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
@@ -263,18 +195,6 @@ app.get('/api/titles/distributed-select', async (req, res) => {
 
 // Distributed search system
 app.get('/api/titles/distributed-search', async (req, res) => {
-  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
-  const proxyTarget = await failoverProxy.getProxyTarget();
-  if (proxyTarget) {
-    console.log(`🔄 Proactively proxying /api/titles/distributed-search to ${proxyTarget.name}`);
-    return failoverProxy.forwardToMain(req, res, () => {
-      res.status(500).json({
-        success: false,
-        message: 'Error in distributed_search - all nodes unavailable'
-      });
-    });
-  }
-  
   try {
     const { search_term = '', limit_count = 20 } = req.query;
     const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
@@ -319,21 +239,10 @@ app.get('/api/aggregation', async (req, res) => {
       agg.total_votes = agg.total_votes !== null ? Number(agg.total_votes) : null;
       agg.average_votes = agg.average_votes !== null ? Number(agg.average_votes) : null;
     }
-    
-    // Add debug info to response
-    const currentNode = failoverProxy.getCurrentNode();
-    res.set('X-Data-Source', 'distributed_aggregation');
-    res.set('X-Served-By', currentNode);
-    
     res.json({
       success: true,
       raw: results,
-      data: agg,
-      debug: {
-        source: 'distributed_aggregation',
-        servedBy: currentNode,
-        movieCount: agg?.movie_count
-      }
+      data: agg
     });
   } catch (error) {
     console.error('Error fetching aggregations:', error);
@@ -392,7 +301,13 @@ app.get('/api/aggregation', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching aggregations',
-      error: error.message
+      error: error.message,
+      _debug: {
+        node: failoverProxy.getCurrentNode(),
+        errorCode: error.code,
+        isConnectionError: error.code === 'EHOSTUNREACH' || error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED',
+        timestamp: new Date().toISOString()
+      }
     });
   }
 });
