@@ -26,6 +26,14 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Add debug headers to all responses
+app.use((req, res, next) => {
+  const currentNode = failoverProxy.getCurrentNode();
+  res.set('X-Current-Node', currentNode);
+  res.set('X-DB-Healthy', failoverProxy.isDatabaseHealthy() ? 'true' : 'false');
+  next();
+});
+
 // Middleware to force Node B to always proxy to coordinator (Main or Node A)
 app.use('/api', (req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
@@ -239,10 +247,21 @@ app.get('/api/aggregation', async (req, res) => {
       agg.total_votes = agg.total_votes !== null ? Number(agg.total_votes) : null;
       agg.average_votes = agg.average_votes !== null ? Number(agg.average_votes) : null;
     }
+    
+    // Add debug info to response
+    const currentNode = failoverProxy.getCurrentNode();
+    res.set('X-Data-Source', 'distributed_aggregation');
+    res.set('X-Served-By', currentNode);
+    
     res.json({
       success: true,
       raw: results,
-      data: agg
+      data: agg,
+      debug: {
+        source: 'distributed_aggregation',
+        servedBy: currentNode,
+        movieCount: agg?.movie_count
+      }
     });
   } catch (error) {
     console.error('Error fetching aggregations:', error);
@@ -301,13 +320,7 @@ app.get('/api/aggregation', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching aggregations',
-      error: error.message,
-      _debug: {
-        node: failoverProxy.getCurrentNode(),
-        errorCode: error.code,
-        isConnectionError: error.code === 'EHOSTUNREACH' || error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED',
-        timestamp: new Date().toISOString()
-      }
+      error: error.message
     });
   }
 });
