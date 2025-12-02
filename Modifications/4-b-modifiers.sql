@@ -23,33 +23,25 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
+    DECLARE federated_error INT DEFAULT 0;
     
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone),
+    --              1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
-        -- Log ABORT
-        INSERT INTO transaction_log (
-            transaction_id, log_sequence, log_type, 
-            timestamp, table_name, operation_type, source_node
-        ) VALUES (
-            current_transaction_id, 
-            IFNULL(@current_log_sequence, 0) + 1,
-            'ABORT',
-            NOW(6),
-            'title_ft',
-            'INSERT',
-            'node_b'
-        );
-        
-        SET @current_transaction_id = NULL;
-        SET @current_log_sequence = NULL;
-        ROLLBACK;
-        RESIGNAL;
+        SET federated_error = 1;
+        -- Local operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
     
     -- Initialize transaction
     SET current_transaction_id = UUID();
     SET @current_transaction_id = current_transaction_id;
     SET @current_log_sequence = 0;
+
+    START TRANSACTION;
 
     -- Calculate global mean from Main
     SELECT AVG(averageRating) INTO global_mean
@@ -82,6 +74,25 @@ BEGIN
         );
     END IF;
 
+    -- Insert into local node if this record belongs here (< 2025, including NULL)
+    IF new_startYear IS NULL OR new_startYear < 2025 THEN
+        INSERT INTO title_ft
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+    END IF;
+
+    -- Log INSERT to local
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'INSERT', 'NODE_B', NOW(6));
+
+    -- Create a savepoint before attempting federated operations
+    SAVEPOINT before_federated;
+
+    -- Set flag to prevent triggers on federated nodes from logging
+    SET @federated_operation = 1;
+
     -- Insert into Main via federated table
     INSERT INTO title_ft_main
       (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, weightedRating, startYear)
@@ -89,30 +100,25 @@ BEGIN
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
        new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
 
-    -- Insert into local node if this record belongs here (< 2025, including NULL)
-    IF new_startYear IS NULL OR new_startYear < 2025 THEN
-        INSERT INTO title_ft
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+    -- If federated operation failed, roll back immediately
+    IF federated_error = 1 THEN
+        ROLLBACK TO SAVEPOINT before_federated;
     END IF;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
     
     -- Log COMMIT
-    INSERT INTO transaction_log (
-        transaction_id, log_sequence, log_type, 
-        timestamp, table_name, operation_type, source_node
-    ) VALUES (
-        current_transaction_id, 
-        IFNULL(@current_log_sequence, 0) + 1,
-        'COMMIT',
-        NOW(6),
-        'title_ft',
-        'INSERT',
-        'node_b'
-    );
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'NODE_B', NOW(6));
     
+    COMMIT;
+    
+    -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
-    COMMIT;
 END$$
 
 CREATE PROCEDURE distributed_update(
@@ -129,27 +135,17 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE updated_weightedRating DECIMAL(4,2);
+    DECLARE federated_error INT DEFAULT 0;
     
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone),
+    --              1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
-        -- Log ABORT
-        INSERT INTO transaction_log (
-            transaction_id, log_sequence, log_type, 
-            timestamp, table_name, operation_type, source_node
-        ) VALUES (
-            current_transaction_id, 
-            IFNULL(@current_log_sequence, 0) + 1,
-            'ABORT',
-            NOW(6),
-            'title_ft',
-            'UPDATE',
-            'node_b'
-        );
-        
-        SET @current_transaction_id = NULL;
-        SET @current_log_sequence = NULL;
-        ROLLBACK;
-        RESIGNAL;
+        SET federated_error = 1;
+        -- Local operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
     
     -- Initialize transaction
@@ -157,9 +153,11 @@ BEGIN
     SET @current_transaction_id = current_transaction_id;
     SET @current_log_sequence = 0;
 
-    -- Get initial startYear from Main
+    START TRANSACTION;
+
+    -- Get initial startYear from local node
     SELECT startYear INTO old_startYear
-    FROM title_ft_main
+    FROM title_ft
     WHERE tconst = new_tconst;
 
     -- Calculate global mean from Main
@@ -187,27 +185,8 @@ BEGIN
         + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
     );
 
-    -- Update Main via federated table
-    UPDATE title_ft_main
-    SET primaryTitle = new_primaryTitle,
-        runtimeMinutes = new_runtimeMinutes,
-        averageRating = new_averageRating,
-        numVotes = new_numVotes,
-        startYear = new_startYear,
-        weightedRating = updated_weightedRating
-    WHERE tconst = new_tconst;
-
-    -- Handle local node updates based on startYear changes
-    IF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
-        -- Moving to Node B - insert locally
-        INSERT INTO title_ft
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-    ELSEIF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
-        -- Moving from Node B to Node A - delete locally
-        DELETE FROM title_ft WHERE tconst = new_tconst;
-    ELSEIF new_startYear IS NULL OR new_startYear < 2025 THEN
-        -- Staying in Node B - update locally
+    -- Update local node if this record belongs here (< 2025 or NULL)
+    IF new_startYear IS NULL OR new_startYear < 2025 THEN
         UPDATE title_ft
         SET primaryTitle = new_primaryTitle,
             runtimeMinutes = new_runtimeMinutes,
@@ -217,24 +196,83 @@ BEGIN
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
     END IF;
+
+    -- Log UPDATE to local
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'UPDATE', 'NODE_B', NOW(6));
+
+    -- Create a savepoint before attempting federated operations
+    SAVEPOINT before_federated;
+
+    -- Set flag to prevent triggers on federated nodes from logging
+    SET @federated_operation = 1;
+
+    -- Handle partition moves based on startYear changes
+    IF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
+        -- Moving to Node B - delete from Main/Node A
+        DELETE FROM title_ft_main WHERE tconst = new_tconst;
+        
+        -- If federated operation failed, roll back immediately and skip rest
+        IF federated_error = 1 THEN
+            ROLLBACK TO SAVEPOINT before_federated;
+        ELSE
+            -- Only update if DELETE succeeded
+            UPDATE title_ft
+            SET primaryTitle = new_primaryTitle,
+                runtimeMinutes = new_runtimeMinutes,
+                averageRating = new_averageRating,
+                numVotes = new_numVotes,
+                startYear = new_startYear,
+                weightedRating = updated_weightedRating
+            WHERE tconst = new_tconst;
+            
+            -- If UPDATE failed, rollback
+            IF federated_error = 1 THEN
+                ROLLBACK TO SAVEPOINT before_federated;
+            END IF;
+        END IF;
+        
+    ELSEIF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
+        -- Moving from Node B - delete from local, update Main
+        DELETE FROM title_ft WHERE tconst = new_tconst;
+        
+        -- If federated operation failed, roll back immediately and skip rest
+        IF federated_error = 1 THEN
+            ROLLBACK TO SAVEPOINT before_federated;
+        ELSE
+            -- Only attempt INSERT to Main if DELETE succeeded
+            UPDATE title_ft_main
+            SET primaryTitle = new_primaryTitle,
+                runtimeMinutes = new_runtimeMinutes,
+                averageRating = new_averageRating,
+                numVotes = new_numVotes,
+                startYear = new_startYear,
+                weightedRating = updated_weightedRating
+            WHERE tconst = new_tconst;
+            
+            -- If INSERT also failed, rollback
+            IF federated_error = 1 THEN
+                ROLLBACK TO SAVEPOINT before_federated;
+            END IF;
+        END IF;
+    END IF;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
     
     -- Log COMMIT
-    INSERT INTO transaction_log (
-        transaction_id, log_sequence, log_type, 
-        timestamp, table_name, operation_type, source_node
-    ) VALUES (
-        current_transaction_id, 
-        IFNULL(@current_log_sequence, 0) + 1,
-        'COMMIT',
-        NOW(6),
-        'title_ft',
-        'UPDATE',
-        'node_b'
-    );
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'NODE_B', NOW(6));
     
+    COMMIT;
+    
+    -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
-    COMMIT;
 END$$
 
 CREATE PROCEDURE distributed_delete(
@@ -242,27 +280,17 @@ CREATE PROCEDURE distributed_delete(
 )
 BEGIN
     DECLARE current_transaction_id VARCHAR(36);
+    DECLARE federated_error INT DEFAULT 0;
     
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    -- Handler for federated table errors - set flag and continue
+    -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone),
+    --              1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
-        -- Log ABORT
-        INSERT INTO transaction_log (
-            transaction_id, log_sequence, log_type, 
-            timestamp, table_name, operation_type, source_node
-        ) VALUES (
-            current_transaction_id, 
-            IFNULL(@current_log_sequence, 0) + 1,
-            'ABORT',
-            NOW(6),
-            'title_ft',
-            'DELETE',
-            'node_b'
-        );
-        
-        SET @current_transaction_id = NULL;
-        SET @current_log_sequence = NULL;
-        ROLLBACK;
-        RESIGNAL;
+        SET federated_error = 1;
+        -- Local operation succeeds, federated replication failed
+        -- Recovery system will sync when nodes come back online
     END;
     
     -- Initialize transaction
@@ -270,29 +298,45 @@ BEGIN
     SET @current_transaction_id = current_transaction_id;
     SET @current_log_sequence = 0;
     
+    START TRANSACTION;
+    
+    -- Delete from local node
+    DELETE FROM title_ft WHERE tconst = new_tconst;
+    
+    -- Log DELETE to local
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'DELETE', 'NODE_B', NOW(6));
+
+    -- Create a savepoint before attempting federated operations
+    SAVEPOINT before_federated;
+
+    -- Set flag to prevent triggers on federated nodes from logging
+    SET @federated_operation = 1;
+    
     -- Delete from Main via federated table
     DELETE FROM title_ft_main WHERE tconst = new_tconst;
     
-    -- Delete from local node if exists
-    DELETE FROM title_ft WHERE tconst = new_tconst;
+    -- If federated operation failed, roll back immediately
+    IF federated_error = 1 THEN
+        ROLLBACK TO SAVEPOINT before_federated;
+    END IF;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
     
     -- Log COMMIT
-    INSERT INTO transaction_log (
-        transaction_id, log_sequence, log_type, 
-        timestamp, table_name, operation_type, source_node
-    ) VALUES (
-        current_transaction_id, 
-        IFNULL(@current_log_sequence, 0) + 1,
-        'COMMIT',
-        NOW(6),
-        'title_ft',
-        'DELETE',
-        'node_b'
-    );
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'NODE_B', NOW(6));
     
+    COMMIT;
+    
+    -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
-    COMMIT;
 END$$
 
 

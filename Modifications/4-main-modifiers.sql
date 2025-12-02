@@ -240,23 +240,8 @@ BEGIN
         + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
     );
 
-    UPDATE `stadvdb-mco2`.title_ft
-    SET primaryTitle = new_primaryTitle,
-        runtimeMinutes = new_runtimeMinutes,
-        averageRating = new_averageRating,
-        numVotes = new_numVotes,
-        startYear = new_startYear,
-        weightedRating = updated_weightedRating
-    WHERE tconst = new_tconst;
-
-    -- Log UPDATE to Main
-    SET @current_log_sequence = @current_log_sequence + 1;
-    INSERT INTO transaction_log 
-    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
-    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'UPDATE', 'MAIN', NOW(6));
-
     -- Create a savepoint before attempting federated operations
-    -- If federated operations fail, we roll back to here but keep Main update
+    -- IMPORTANT: Test partition moves FIRST before updating Main
     SAVEPOINT before_federated;
 
     -- Set flag to prevent triggers on federated nodes from logging
@@ -264,42 +249,51 @@ BEGIN
 
     -- Check if you need to move to a new node (use federated tables)
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
+    -- We TEST these operations first - if they fail, entire transaction fails
     IF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
         -- Moving from B to A
         DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
         
-        -- If federated operation failed, roll back immediately and skip rest
+        -- If federated operation failed, abort entire transaction
         IF federated_error = 1 THEN
-            ROLLBACK TO SAVEPOINT before_federated;
-        ELSE
-            -- Only attempt INSERT if DELETE succeeded
-            INSERT INTO title_ft_node_a
-            VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                    new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-            
-            -- If INSERT also failed, rollback
-            IF federated_error = 1 THEN
-                ROLLBACK TO SAVEPOINT before_federated;
-            END IF;
+            SET @federated_operation = NULL;
+            ROLLBACK;
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot move record to Node A - Node A may be offline';
+        END IF;
+        
+        -- Only attempt INSERT if DELETE succeeded
+        INSERT INTO title_ft_node_a
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
+        
+        -- If INSERT also failed, abort entire transaction
+        IF federated_error = 1 THEN
+            SET @federated_operation = NULL;
+            ROLLBACK;
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot insert record to Node A - Node A may be offline';
         END IF;
         
     ELSEIF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
         -- Moving from A to B
         DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
         
-        -- If federated operation failed, roll back immediately and skip rest
+        -- If federated operation failed, abort entire transaction
         IF federated_error = 1 THEN
-            ROLLBACK TO SAVEPOINT before_federated;
-        ELSE
-            -- Only attempt INSERT if DELETE succeeded
-            INSERT INTO title_ft_node_b
-            VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                    new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-            
-            -- If INSERT also failed, rollback
-            IF federated_error = 1 THEN
-                ROLLBACK TO SAVEPOINT before_federated;
-            END IF;
+            SET @federated_operation = NULL;
+            ROLLBACK;
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot move record from Node A - Node A may be offline';
+        END IF;
+        
+        -- Only attempt INSERT if DELETE succeeded
+        INSERT INTO title_ft_node_b
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
+        
+        -- If INSERT also failed, abort entire transaction
+        IF federated_error = 1 THEN
+            SET @federated_operation = NULL;
+            ROLLBACK;
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot insert record to Node B - Node B may be offline';
         END IF;
         
     ELSE
@@ -314,9 +308,11 @@ BEGIN
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
             
-            -- If UPDATE failed, rollback
+            -- If UPDATE failed, abort entire transaction
             IF federated_error = 1 THEN
-                ROLLBACK TO SAVEPOINT before_federated;
+                SET @federated_operation = NULL;
+                ROLLBACK;
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot update record on Node A - Node A may be offline';
             END IF;
         ELSE
             UPDATE title_ft_node_b
@@ -328,15 +324,33 @@ BEGIN
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
             
-            -- If UPDATE failed, rollback
+            -- If UPDATE failed, abort entire transaction
             IF federated_error = 1 THEN
-                ROLLBACK TO SAVEPOINT before_federated;
+                SET @federated_operation = NULL;
+                ROLLBACK;
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cannot update record on Node B - Node B may be offline';
             END IF;
         END IF;
     END IF;
 
     -- Clear federated flag
     SET @federated_operation = NULL;
+
+    -- NOW update Main only if all federated operations succeeded
+    UPDATE `stadvdb-mco2`.title_ft
+    SET primaryTitle = new_primaryTitle,
+        runtimeMinutes = new_runtimeMinutes,
+        averageRating = new_averageRating,
+        numVotes = new_numVotes,
+        startYear = new_startYear,
+        weightedRating = updated_weightedRating
+    WHERE tconst = new_tconst;
+
+    -- Log UPDATE to Main
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'UPDATE', 'MAIN', NOW(6));
 
     -- Log COMMIT before committing transaction
     SET @current_log_sequence = @current_log_sequence + 1;

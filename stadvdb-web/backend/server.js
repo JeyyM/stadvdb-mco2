@@ -101,6 +101,11 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
       // Check if it's a federated table error (node down)
       const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
                                procError.message?.includes('Can\'t connect to MySQL server') ||
+                               procError.message?.includes('Cannot move record to Node') ||
+                               procError.message?.includes('Cannot insert record to Node') ||
+                               procError.message?.includes('Cannot update record on Node') ||
+                               procError.message?.includes('Node A may be offline') ||
+                               procError.message?.includes('Node B may be offline') ||
                                procError.message?.includes('FEDERATED') ||
                                procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
                                procError.errno === 1159 || procError.errno === 1189 ||
@@ -249,8 +254,14 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
       // Check if it's a federated table error (node down)
       // Error codes: 1296 (ER_GET_ERRMSG wrapper), 1429, 1430, etc. for federated errors
       // Error 1205 (ER_LOCK_WAIT_TIMEOUT) can also indicate federated operation holdups
+      // Also check for procedure SIGNAL messages about node availability
       const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
                                procError.message?.includes('Can\'t connect to MySQL server') ||
+                               procError.message?.includes('Cannot move record to Node') ||
+                               procError.message?.includes('Cannot insert record to Node') ||
+                               procError.message?.includes('Cannot update record on Node') ||
+                               procError.message?.includes('Node A may be offline') ||
+                               procError.message?.includes('Node B may be offline') ||
                                procError.message?.includes('FEDERATED') ||
                                procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
                                procError.errno === 1159 || procError.errno === 1189 ||
