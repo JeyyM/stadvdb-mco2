@@ -53,6 +53,18 @@ app.use('/api', (req, res, next) => {
 // DISTRIBUTED TRANSACTIONS
 // Distributed insert system
 app.post('/api/titles/distributed-insert', async (req, res) => {
+  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+  const proxyTarget = await failoverProxy.getProxyTarget();
+  if (proxyTarget) {
+    console.log(`🔄 Proactively proxying /api/titles/distributed-insert to ${proxyTarget.name}`);
+    return failoverProxy.forwardToMain(req, res, () => {
+      res.status(500).json({
+        success: false,
+        message: 'Insert Error - all nodes unavailable'
+      });
+    });
+  }
+  
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     
@@ -75,6 +87,18 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
 
 // Distributed update system
 app.post('/api/titles/distributed-update', async (req, res) => {
+  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+  const proxyTarget = await failoverProxy.getProxyTarget();
+  if (proxyTarget) {
+    console.log(`🔄 Proactively proxying /api/titles/distributed-update to ${proxyTarget.name}`);
+    return failoverProxy.forwardToMain(req, res, () => {
+      res.status(500).json({
+        success: false,
+        message: 'Update Error - all nodes unavailable'
+      });
+    });
+  }
+  
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
     
@@ -96,6 +120,18 @@ app.post('/api/titles/distributed-update', async (req, res) => {
 
 // Distributed delete system
 app.post('/api/titles/distributed-delete', async (req, res) => {
+  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+  const proxyTarget = await failoverProxy.getProxyTarget();
+  if (proxyTarget) {
+    console.log(`🔄 Proactively proxying /api/titles/distributed-delete to ${proxyTarget.name}`);
+    return failoverProxy.forwardToMain(req, res, () => {
+      res.status(500).json({
+        success: false,
+        message: 'Delete Error - all nodes unavailable'
+      });
+    });
+  }
+  
   try {
     const { tconst } = req.body;
     
@@ -117,6 +153,18 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
 
 // Add reviews system
 app.post('/api/titles/add-reviews', async (req, res) => {
+  // Check if we should proxy first (Main with DB down, or always-proxy nodes)
+  const proxyTarget = await failoverProxy.getProxyTarget();
+  if (proxyTarget) {
+    console.log(`🔄 Proactively proxying /api/titles/add-reviews to ${proxyTarget.name}`);
+    return failoverProxy.forwardToMain(req, res, () => {
+      res.status(500).json({
+        success: false,
+        message: 'Add Reviews Error - all nodes unavailable'
+      });
+    });
+  }
+  
   try {
     const { tconst, newRating, newVotes } = req.body;
     
