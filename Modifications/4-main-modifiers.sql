@@ -194,19 +194,13 @@ BEGIN
     
     -- Handler for federated table errors - set flag and continue
     -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
-    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone),
+    --              1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
         SET federated_error = 1;
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
-    END;
-    
-    -- Also handle error 1296 (ER_GET_ERRMSG - wrapper for federated connection errors)
-    DECLARE CONTINUE HANDLER FOR 1296
-    BEGIN
-        SET federated_error = 1;
-        -- Federated connection failed, continue without rolling back
     END;
 
     -- Initialize transaction logging
@@ -271,64 +265,45 @@ BEGIN
     -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
     IF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
         -- Moving from B to A
-        -- Log BEGIN to Node A
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        
         DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
         
-        -- Log DELETE to Node B
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS', 
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
-            NULL, 'DELETE');
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
-        
-        INSERT INTO title_ft_node_a
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-                
-        -- Log INSERT to Node A
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            NULL,
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
-            'INSERT');
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        -- If federated operation failed, roll back immediately and skip rest
+        IF federated_error = 1 THEN
+            ROLLBACK TO SAVEPOINT before_federated;
+        ELSE
+            -- Only attempt INSERT if DELETE succeeded
+            INSERT INTO title_ft_node_a
+            VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                    new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
+            
+            -- If INSERT also failed, rollback
+            IF federated_error = 1 THEN
+                ROLLBACK TO SAVEPOINT before_federated;
+            END IF;
+        END IF;
         
     ELSEIF (old_startYear >= 2025) AND (new_startYear IS NULL OR new_startYear < 2025) THEN
         -- Moving from A to B
-        -- Log BEGIN to Node B
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        
         DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
         
-        -- Log DELETE to Node A
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
-            NULL, 'DELETE');
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
-        
-        INSERT INTO title_ft_node_b
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
-                
-        -- Log INSERT to Node B
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            NULL,
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
-            'INSERT');
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        -- If federated operation failed, roll back immediately and skip rest
+        IF federated_error = 1 THEN
+            ROLLBACK TO SAVEPOINT before_federated;
+        ELSE
+            -- Only attempt INSERT if DELETE succeeded
+            INSERT INTO title_ft_node_b
+            VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                    new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
+            
+            -- If INSERT also failed, rollback
+            IF federated_error = 1 THEN
+                ROLLBACK TO SAVEPOINT before_federated;
+            END IF;
+        END IF;
         
     ELSE
         -- Staying in the same node
         IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
-            -- Log to Node A
-            CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-            
             UPDATE title_ft_node_a
             SET primaryTitle = new_primaryTitle,
                 runtimeMinutes = new_runtimeMinutes,
@@ -338,17 +313,11 @@ BEGIN
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
             
-            CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
-                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
-                'UPDATE');
-            CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+            -- If UPDATE failed, rollback
+            IF federated_error = 1 THEN
+                ROLLBACK TO SAVEPOINT before_federated;
+            END IF;
         ELSE
-            -- Log to Node B
-            CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-            
             UPDATE title_ft_node_b
             SET primaryTitle = new_primaryTitle,
                 runtimeMinutes = new_runtimeMinutes,
@@ -358,19 +327,11 @@ BEGIN
                 weightedRating = updated_weightedRating
             WHERE tconst = new_tconst;
             
-            CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', old_startYear),
-                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', updated_weightedRating, 'startYear', new_startYear),
-                'UPDATE');
-            CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+            -- If UPDATE failed, rollback
+            IF federated_error = 1 THEN
+                ROLLBACK TO SAVEPOINT before_federated;
+            END IF;
         END IF;
-    END IF;
-
-    -- If federated operations failed, roll back to savepoint but keep Main update
-    IF federated_error = 1 THEN
-        ROLLBACK TO SAVEPOINT before_federated;
     END IF;
 
     -- Clear federated flag
@@ -409,19 +370,13 @@ BEGIN
     
     -- Handler for federated table errors - set flag and continue
     -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
-    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone),
+    --              1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
         SET federated_error = 1;
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
-    END;
-    
-    -- Also handle error 1296 (ER_GET_ERRMSG - wrapper for federated connection errors)
-    DECLARE CONTINUE HANDLER FOR 1296
-    BEGIN
-        SET federated_error = 1;
-        -- Federated connection failed, continue without rolling back
     END;
 
     -- Initialize transaction logging

@@ -128,17 +128,27 @@ app.post('/api/titles/distributed-update', async (req, res) => {
         sqlMessage: procError.sqlMessage
       });
       
+      // Always rollback to clean up any uncommitted transaction
+      try {
+        await db.query('ROLLBACK');
+      } catch (e) {
+        // Ignore - transaction may have already ended
+      }
+      
       // Check if it's a federated table error (node down)
-      // Error 1296 = ER_GET_ERRMSG (wrapper for federated errors)
+      // Error codes: 1296 (ER_GET_ERRMSG wrapper), 1429, 1430, etc. for federated errors
+      // Error 1205 (ER_LOCK_WAIT_TIMEOUT) can also indicate federated operation holdups
       const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
                                procError.message?.includes('Can\'t connect to MySQL server') ||
                                procError.message?.includes('FEDERATED') ||
                                procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
                                procError.errno === 1159 || procError.errno === 1189 ||
-                               procError.errno === 2013 || procError.errno === 2006;
+                               procError.errno === 2013 || procError.errno === 2006 || procError.errno === 1430;
       
-      if (isFederatedError) {
-        console.warn('⚠️ Federated error during update (node offline). Recovery will sync later.');
+      const isLockTimeout = procError.errno === 1205 && procError.code === 'ER_LOCK_WAIT_TIMEOUT';
+      
+      if (isFederatedError || isLockTimeout) {
+        console.warn('⚠️ Federated error or lock timeout during update (node offline). Recovery will sync later.');
         // Even though procedure failed, Main DB may have been partially updated
         // Return success to signal that recovery system will handle sync
         return res.json({ 
@@ -190,17 +200,27 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
       await db.query(sql, params);
       res.json({ success: true, message: 'Deleted successfully' });
     } catch (procError) {
+      // Always rollback to clean up any uncommitted transaction
+      try {
+        await db.query('ROLLBACK');
+      } catch (e) {
+        // Ignore - transaction may have already ended
+      }
+      
       // Check if it's a federated table error (node down)
-      // Error 1296 = ER_GET_ERRMSG (wrapper for federated errors)
+      // Error codes: 1296 (ER_GET_ERRMSG wrapper), 1429, 1430, etc. for federated errors
+      // Error 1205 (ER_LOCK_WAIT_TIMEOUT) can also indicate federated operation holdups
       const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
                                procError.message?.includes('Can\'t connect to MySQL server') ||
                                procError.message?.includes('FEDERATED') ||
                                procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
                                procError.errno === 1159 || procError.errno === 1189 ||
-                               procError.errno === 2013 || procError.errno === 2006;
+                               procError.errno === 2013 || procError.errno === 2006 || procError.errno === 1430;
       
-      if (isFederatedError) {
-        console.warn('⚠️ Federated error during delete (node offline). Recovery will sync later.');
+      const isLockTimeout = procError.errno === 1205 && procError.code === 'ER_LOCK_WAIT_TIMEOUT';
+      
+      if (isFederatedError || isLockTimeout) {
+        console.warn('⚠️ Federated error or lock timeout during delete (node offline). Recovery will sync later.');
         return res.json({ 
           success: true, 
           message: 'Deleted successfully (recovery will sync to offline nodes)',
@@ -260,17 +280,27 @@ app.post('/api/titles/add-reviews', async (req, res) => {
       await db.query(sql, params);
       res.json({ success: true, message: 'Reviews added successfully' });
     } catch (procError) {
+      // Always rollback to clean up any uncommitted transaction
+      try {
+        await db.query('ROLLBACK');
+      } catch (e) {
+        // Ignore - transaction may have already ended
+      }
+      
       // Check if it's a federated table error (node down)
-      // Error 1296 = ER_GET_ERRMSG (wrapper for federated errors)
+      // Error codes: 1296 (ER_GET_ERRMSG wrapper), 1429, 1430, etc. for federated errors
+      // Error 1205 (ER_LOCK_WAIT_TIMEOUT) can also indicate federated operation holdups
       const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
                                procError.message?.includes('Can\'t connect to MySQL server') ||
                                procError.message?.includes('FEDERATED') ||
                                procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
                                procError.errno === 1159 || procError.errno === 1189 ||
-                               procError.errno === 2013 || procError.errno === 2006;
+                               procError.errno === 2013 || procError.errno === 2006 || procError.errno === 1430;
       
-      if (isFederatedError) {
-        console.warn('⚠️ Federated error during add-reviews (node offline). Recovery will sync later.');
+      const isLockTimeout = procError.errno === 1205 && procError.code === 'ER_LOCK_WAIT_TIMEOUT';
+      
+      if (isFederatedError || isLockTimeout) {
+        console.warn('⚠️ Federated error or lock timeout during add-reviews (node offline). Recovery will sync later.');
         return res.json({ 
           success: true, 
           message: 'Reviews added successfully (recovery will sync to offline nodes)',
