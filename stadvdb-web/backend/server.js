@@ -206,7 +206,7 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
       } catch (e) {
         // Ignore - transaction may have already ended
       }
-      
+      //
       // Check if it's a federated table error (node down)
       // Error codes: 1296 (ER_GET_ERRMSG wrapper), 1429, 1430, etc. for federated errors
       // Error 1205 (ER_LOCK_WAIT_TIMEOUT) can also indicate federated operation holdups
