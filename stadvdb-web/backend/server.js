@@ -1,7 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
-const db = require('./db');
+// Use failover-capable database connection
+const db = require('./db-failover');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -40,7 +41,7 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     
-    await db.query(sql, params);
+    await db.query(sql, params, { isWrite: true }); // Mark as write operation
     res.json({ success: true, message: 'Inserted successfully' });
     
   } catch (error) {
@@ -61,7 +62,7 @@ app.post('/api/titles/distributed-update', async (req, res) => {
     const sql = 'CALL distributed_update(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     
-    await db.query(sql, params);
+    await db.query(sql, params, { isWrite: true }); // Mark as write operation
     res.json({ success: true, message: 'Updated successfully' });
     
   } catch (error) {
@@ -82,7 +83,7 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
     const sql = 'CALL distributed_delete(?)';
     const params = [tconst];
     
-    await db.query(sql, params);
+    await db.query(sql, params, { isWrite: true }); // Mark as write operation
     res.json({ success: true, message: 'Deleted successfully' });
     
   } catch (error) {
@@ -96,7 +97,7 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
 app.get('/api/titles/distributed-select', async (req, res) => {
     try {
         const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
-        const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)]);
+        const [results] = await db.query('CALL distributed_select(?, ?, ?)', [select_column, order_direction, parseInt(limit_count)], { isWrite: false }); // Mark as read
         res.json({ success: true, count: results[0]?.length || 0, data: results[0] || [] });
     } catch (error) {
         res.status(500).json({ message: 'Error in select', error: error.message });
@@ -107,7 +108,7 @@ app.get('/api/titles/distributed-select', async (req, res) => {
 app.get('/api/titles/distributed-search', async (req, res) => {
   try {
     const { search_term = '', limit_count = 20 } = req.query;
-    const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)]);
+    const [results] = await db.query('CALL distributed_search(?, ?)', [search_term, parseInt(limit_count)], { isWrite: false }); // Mark as read
     res.json({
       success: true,
       count: results[0]?.length || 0,
@@ -126,7 +127,7 @@ app.get('/api/titles/distributed-search', async (req, res) => {
 // Aggregation Route
 app.get('/api/aggregation', async (req, res) => {
   try {
-    const [results] = await db.query('CALL distributed_aggregation()');
+    const [results] = await db.query('CALL distributed_aggregation()', [], { isWrite: false }); // Mark as read
     let agg = results[0] && results[0][0] ? results[0][0] : null;
     if (agg) {
       agg.movie_count = Number(agg.movie_count);
@@ -241,6 +242,31 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend API is working!' });
 });
 
+// Health status endpoint - shows which database nodes are available
+app.get('/api/db-status', (req, res) => {
+  const status = db.getNodeStatus();
+  res.json({
+    success: true,
+    nodes: status,
+    summary: {
+      totalNodes: Object.keys(status).length,
+      availableNodes: Object.values(status).filter(n => n.available).length,
+      mainAvailable: status.MAIN?.available || false,
+      nodeAActingMaster: status.NODE_A?.isActingMaster || false
+    }
+  });
+});
+
+// Manual health check trigger
+app.post('/api/db-check-health', async (req, res) => {
+  try {
+    await db.checkHealth();
+    res.json({ success: true, message: 'Health check completed', status: db.getNodeStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Health check failed', error: error.message });
+  }
+});
+
 // ============================================================================
 // START SERVER
 // ============================================================================
@@ -248,4 +274,5 @@ app.get('/api/test', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
   console.log(`📊 API endpoints available at http://localhost:${PORT}/api`);
+  console.log(`🏥 Database health status: http://localhost:${PORT}/api/db-status`);
 });
