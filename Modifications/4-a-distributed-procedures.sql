@@ -511,7 +511,7 @@ BEGIN
     END;
 
     -- Check if record exists in Node A
-    SELECT COUNT(*) > 0, startYear INTO found_in_a, old_startYear
+    SELECT COUNT(*) > 0, MAX(startYear) INTO found_in_a, old_startYear
     FROM title_ft
     WHERE tconst = new_tconst;
 
@@ -561,7 +561,7 @@ BEGIN
     END IF;
 
     -- Find the record in Node A or B
-    SELECT COUNT(*) > 0, numVotes, averageRating, startYear 
+    SELECT COUNT(*) > 0, MAX(numVotes), MAX(averageRating), MAX(startYear) 
     INTO found_in_a, current_numVotes, current_averageRating, current_startYear
     FROM title_ft
     WHERE tconst = new_tconst;
