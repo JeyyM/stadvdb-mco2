@@ -10,7 +10,10 @@ const pool = mysql.createPool({
   port: process.env.DB_PORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  enableTimeout: true,
+  timeout: 20000, // 20 second connection timeout
+  connectionTimeout: 5000 // 5 second timeout to get a connection from pool
 });
 
 // Promisify the pool for async/await//

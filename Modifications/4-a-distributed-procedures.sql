@@ -309,6 +309,7 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
     DECLARE federated_error INT DEFAULT 0;
+    DECLARE result_message VARCHAR(500);
     
     DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
     BEGIN
@@ -385,11 +386,16 @@ BEGIN
         COMMIT;
     END IF;
 
-    -- PHASE 2: Attempt replication to Main (best effort)
+    -- PHASE 2: Attempt replication to Main (best effort, with timeout handling)
     SET federated_error = 0;
+    
+    -- Set a short timeout for the federated insert (30 seconds max)
+    SET SESSION max_execution_time = 30000;
+    
     START TRANSACTION;
     BEGIN
-        DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+        -- Catch federated errors AND timeout errors (1317 = Query execution was interrupted)
+        DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430, 1317, 3024
         BEGIN
             SET federated_error = 1;
             ROLLBACK;
@@ -400,11 +406,18 @@ BEGIN
         COMMIT;
     END;
     
+    -- Reset timeout
+    SET SESSION max_execution_time = 0;
+    
+    -- Set result message (only ONE SELECT at the end)
     IF federated_error = 0 THEN
-        SELECT CONCAT('✅ Inserted to Node A/B and replicated to Main: ', new_tconst) AS result;
+        SET result_message = CONCAT('✅ Inserted to Node A/B and replicated to Main: ', new_tconst);
     ELSE
-        SELECT CONCAT('⚠️ Inserted to Node A/B but Main is unreachable (will recover later): ', new_tconst) AS result;
+        SET result_message = CONCAT('⚠️ Inserted to Node A/B but Main is unreachable (will recover later): ', new_tconst);
     END IF;
+    
+    -- Return single result set
+    SELECT result_message AS result;
 END$$
 
 DELIMITER ;
