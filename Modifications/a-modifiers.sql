@@ -23,6 +23,12 @@ BEGIN
     DECLARE min_votes_threshold INT;
     DECLARE calculated_weightedRating DECIMAL(4,2);
 
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
     -- Calculate global mean from Main
     SELECT AVG(averageRating) INTO global_mean
     FROM title_ft_main
@@ -67,6 +73,8 @@ BEGIN
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                 new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
     END IF;
+
+    COMMIT;
 END$$
 
 CREATE PROCEDURE distributed_update(
@@ -83,6 +91,14 @@ BEGIN
     DECLARE global_mean DECIMAL(3,1);
     DECLARE min_votes_threshold INT;
     DECLARE updated_weightedRating DECIMAL(4,2);
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
 
     -- Get initial startYear from Main
     SELECT startYear INTO old_startYear
@@ -148,6 +164,8 @@ BEGIN
     IF sleep_seconds > 0 THEN
     SELECT SLEEP(sleep_seconds);
     END IF;
+
+    COMMIT;
 END$$
 
 CREATE PROCEDURE distributed_delete(
@@ -155,6 +173,11 @@ CREATE PROCEDURE distributed_delete(
     IN sleep_seconds INT
 )
 BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
     -- Delete from Main via federated table
     DELETE FROM title_ft_main WHERE tconst = new_tconst;
 
@@ -164,6 +187,8 @@ BEGIN
     IF sleep_seconds > 0 THEN
     SELECT SLEEP(sleep_seconds);
     END IF;
+
+    COMMIT;
 END$$
 
 
@@ -204,10 +229,6 @@ CREATE PROCEDURE distributed_search(
 )
 BEGIN
 
-    SELECT * FROM title_ft
-    WHERE primaryTitle LIKE CONCAT('%', search_term, '%')
-
-    UNION DISTINCT
     -- Search from Main which has all data
     SELECT * FROM title_ft_main
     WHERE primaryTitle LIKE CONCAT('%', search_term, '%')
