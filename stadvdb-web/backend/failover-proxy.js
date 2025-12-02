@@ -101,8 +101,11 @@ function getProxyTarget() {
     }
     return null; // No proxy available, Node A will handle distributed operations
   } else {
-    // Main node never proxies
-    return null;
+    // Main node: If own database is down, try Node A as backup coordinator
+    if (!isDatabaseHealthy && nodeAHealthy) {
+      return { url: NODE_A_API_URL, name: 'Node A (backup coordinator)' };
+    }
+    return null; // Either Main's DB is healthy (use local), or no backup available
   }
 }
 
