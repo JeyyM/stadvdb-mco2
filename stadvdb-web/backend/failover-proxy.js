@@ -125,18 +125,24 @@ async function forwardToMain(req, res, next) {
   const proxyTarget = getProxyTarget();
   
   if (!proxyTarget) {
-    // No proxy target available - use local database
-    if (CURRENT_NODE === 'NODE_A' && !isDatabaseHealthy) {
+    // No proxy target available
+    if (CURRENT_NODE === 'MAIN') {
+      // Main uses its own database
+      return next();
+    } else if (CURRENT_NODE === 'NODE_A') {
+      // Node A acts as backup coordinator when Main is down
+      return next();
+    } else {
+      // Node B has no fallback - return error
       return res.status(503).json({
         success: false,
-        message: 'Service temporarily unavailable - all nodes unreachable',
+        message: 'Service temporarily unavailable - all coordinator nodes unreachable',
         node: CURRENT_NODE
       });
     }
-    return next(); // Use local database
   }
 
-  // Proxy to target node
+  // Proxy to target node (Main or Node A for Node B)
   console.log(`🔄 ${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`);
 
   try {
