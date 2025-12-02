@@ -294,6 +294,7 @@ DELIMITER $$
 -- ============================================================================
 -- DISTRIBUTED INSERT
 -- Inserts data to appropriate node (A or B) when Main is offline
+-- Includes weighted rating calculations from both Node A and B
 -- ============================================================================
 
 CREATE PROCEDURE distributed_insert(
@@ -305,46 +306,87 @@ CREATE PROCEDURE distributed_insert(
     IN new_startYear SMALLINT UNSIGNED
 )
 BEGIN
+    DECLARE global_mean DECIMAL(3,1);
+    DECLARE min_votes_threshold INT;
+    DECLARE calculated_weightedRating DECIMAL(4,2);
     DECLARE federated_error INT DEFAULT 0;
     DECLARE result_message VARCHAR(500);
-    
+
     DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
     BEGIN
         SET federated_error = 1;
     END;
 
+    -- Calculate global mean from both nodes
+    SELECT AVG(averageRating) INTO global_mean
+    FROM (
+        SELECT averageRating FROM title_ft WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+        UNION ALL
+        SELECT averageRating FROM title_ft_node_b WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+    ) AS combined;
+
+    -- Calculate min_votes_threshold (95th percentile) from both nodes
+    SET @percentile := 0.95;
+    SELECT COUNT(*) INTO @totalCount
+    FROM (
+        SELECT numVotes FROM title_ft WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+        UNION ALL
+        SELECT numVotes FROM title_ft_node_b WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+    ) AS combined;
+    SET @rank_position := CEIL(@percentile * @totalCount);
+    SET @rank_position := GREATEST(@rank_position, 1);
+    SELECT numVotes INTO min_votes_threshold
+    FROM (
+        SELECT numVotes, ROW_NUMBER() OVER (ORDER BY numVotes) AS row_num
+        FROM (
+            SELECT numVotes FROM title_ft WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+            UNION ALL
+            SELECT numVotes FROM title_ft_node_b WHERE averageRating IS NOT NULL AND numVotes IS NOT NULL
+        ) AS all_votes
+    ) AS ordered_votes
+    WHERE row_num = @rank_position
+    LIMIT 1;
+
+    -- Calculate weightedRating using Bayesian formula
+    IF new_numVotes IS NULL OR new_numVotes = 0 THEN
+        SET calculated_weightedRating = global_mean;
+    ELSE
+        SET calculated_weightedRating = ROUND(
+            (new_numVotes / (new_numVotes + min_votes_threshold)) * new_averageRating
+            + (min_votes_threshold / (new_numVotes + min_votes_threshold)) * global_mean, 2
+        );
+    END IF;
+
     -- PHASE 1: Insert to appropriate node based on startYear (guaranteed)
-    -- Use the provided averageRating as weightedRating (no complex calculation)
     IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
         -- Insert to Node A (local)
         START TRANSACTION;
         INSERT INTO title_ft
         (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, weightedRating)
         VALUES
-        (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, new_averageRating);
+        (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
         
         INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, new_value, timestamp, source_node)
-        VALUES (UUID(), 1, 'COMMIT', 'INSERT', new_tconst, 
+        VALUES (UUID(), 1, 'MODIFY', 'INSERT', new_tconst, 
                 JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes, 
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', new_averageRating),
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', calculated_weightedRating),
                 NOW(6), 'NODE_A');
         COMMIT;
     ELSE
         -- Insert to Node B (local)
         START TRANSACTION;
         INSERT INTO title_ft_node_b
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_averageRating, new_startYear);
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
         
         INSERT INTO transaction_log (transaction_id, log_sequence, log_type, operation_type, record_id, new_value, timestamp, source_node)
-        VALUES (UUID(), 1, 'COMMIT', 'INSERT', new_tconst, 
+        VALUES (UUID(), 1, 'MODIFY', 'INSERT', new_tconst, 
                 JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes, 
-                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', new_averageRating),
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', calculated_weightedRating),
                 NOW(6), 'NODE_A');
         COMMIT;
     END IF;
 
     -- PHASE 2: Attempt replication to Main (best effort, non-blocking)
-    -- This is best-effort and should NOT fail the entire procedure if Main is down
     SET federated_error = 0;
     
     BEGIN
@@ -358,7 +400,7 @@ BEGIN
         
         START TRANSACTION;
         INSERT INTO title_ft_main
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_averageRating, new_startYear);
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
         COMMIT;
         
         SET SESSION max_execution_time = 0;
