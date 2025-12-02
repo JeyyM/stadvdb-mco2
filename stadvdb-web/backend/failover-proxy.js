@@ -1,123 +1,189 @@
 /**
  * Failover Proxy Middleware
- * 
- * When Node A or Node B database is unavailable, this middleware automatically
- * proxies requests to the Main node instead of failing completely.
- * 
- * This allows the system to continue operating even when worker nodes are offline.
+ *
+ * Goal:
+ * - MAIN node fails over to Node A if its own DB is unavailable
+ * - Node A / Node B can proxy to MAIN (and each other) as backup
+ *
+ * Frontend:
+ *   https://stadvdb-mco2-main-node.onrender.com/
+ *   https://stadvdb-mco2-a-node.onrender.com
+ *   https://stadvdb-mco2-b-node.onrender.com
+ *
+ * Backend:
+ *   https://stadvdb-mco2-main.onrender.com
+ *   https://stadvdb-mco2-a.onrender.com
+ *   https://stadvdb-mco2-b.onrender.com
  */
 
 const axios = require('axios');
 const db = require('./db');
 
-// Hardcoded configuration - detect node type from DB_NAME
+// Detect current node by DB_NAME
 const DB_NAME = process.env.DB_NAME || 'stadvdb-mco2';
-const CURRENT_NODE = DB_NAME === 'stadvdb-mco2' ? 'MAIN' : 
-                     DB_NAME === 'stadvdb-mco2-a' ? 'NODE_A' : 
-                     DB_NAME === 'stadvdb-mco2-b' ? 'NODE_B' : 'MAIN';
+const CURRENT_NODE =
+  DB_NAME === 'stadvdb-mco2'
+    ? 'MAIN'
+    : DB_NAME === 'stadvdb-mco2-a'
+    ? 'NODE_A'
+    : DB_NAME === 'stadvdb-mco2-b'
+    ? 'NODE_B'
+    : 'MAIN';
 
-// Failover hierarchy: Main → Node A → Node B
+// API URLs
 const MAIN_API_URL = 'https://stadvdb-mco2-main.onrender.com';
 const NODE_A_API_URL = 'https://stadvdb-mco2-a.onrender.com';
 const NODE_B_API_URL = 'https://stadvdb-mco2-b.onrender.com';
 
-// Track health of all nodes
+// Local DB health
 let isDatabaseHealthy = true;
 let lastHealthCheck = Date.now();
-const HEALTH_CHECK_INTERVAL = 30000; // Check every 30 seconds
+const HEALTH_CHECK_INTERVAL = 30000; // 30s
 
-// Cache for remote node health
+// Remote node health
 let mainNodeHealthy = true;
 let nodeAHealthy = true;
 let nodeBHealthy = true;
 let lastRemoteHealthCheck = 0;
-const REMOTE_HEALTH_CHECK_INTERVAL = 15000; // Check remote nodes every 15 seconds
+const REMOTE_HEALTH_CHECK_INTERVAL = 15000; // 15s
 
 /**
- * Check if database connection is healthy
+ * Helper: detect DB / connection errors
+ */
+function isConnectionError(error) {
+  return (
+    error?.code === 'ECONNREFUSED' ||
+    error?.code === 'ETIMEDOUT' ||
+    error?.code === 'ENOTFOUND' ||
+    error?.errno === 'ECONNREFUSED' ||
+    error?.sqlState === 'HY000' ||
+    (typeof error?.message === 'string' &&
+      (error.message.includes('connect ETIMEDOUT') ||
+        error.message.includes('connect ECONNREFUSED')))
+  );
+}
+
+/**
+ * Check if *local* database connection is healthy
  */
 async function checkDatabaseHealth() {
+  // Throttle if we're calling this too frequently
+  const now = Date.now();
+  if (now - lastHealthCheck < 1000) {
+    return isDatabaseHealthy;
+  }
+  lastHealthCheck = now;
+
   try {
     await db.query('SELECT 1');
+    if (!isDatabaseHealthy) {
+      console.log(`✅ DB on ${CURRENT_NODE} is healthy again`);
+    }
     isDatabaseHealthy = true;
     return true;
   } catch (error) {
-    console.error('❌ Database health check failed:', error.message);
+    if (isDatabaseHealthy) {
+      console.error(`❌ DB health check failed on ${CURRENT_NODE}:`, error.message);
+    }
     isDatabaseHealthy = false;
     return false;
   }
 }
 
 /**
- * Check health of remote nodes
+ * Check health of *remote* nodes via /api/recovery/status
  */
 async function checkRemoteNodeHealth() {
   const now = Date.now();
   if (now - lastRemoteHealthCheck < REMOTE_HEALTH_CHECK_INTERVAL) {
-    return; // Don't check too frequently
+    return;
   }
   lastRemoteHealthCheck = now;
 
-  // Check Main node health (if we're not Main)
-  if (CURRENT_NODE !== 'MAIN') {
+  // Helper to ping a node
+  async function pingNode(name, url, setHealthy) {
     try {
-      await axios.get(`${MAIN_API_URL}/api/recovery/status`, { timeout: 5000 });
-      mainNodeHealthy = true;
+      await axios.get(`${url}/api/recovery/status`, { timeout: 5000 });
+      setHealthy(true);
     } catch (error) {
-      mainNodeHealthy = false;
-      console.log('⚠️ Main node appears to be down');
+      setHealthy(false);
+      console.log(`⚠️ ${name} appears to be down: ${error.message}`);
     }
   }
 
-  // Check Node A health (if we're Main or Node B - both might need to proxy to Node A)
-  if (CURRENT_NODE === 'MAIN' || CURRENT_NODE === 'NODE_B') {
-    try {
-      await axios.get(`${NODE_A_API_URL}/api/recovery/status`, { timeout: 5000 });
-      nodeAHealthy = true;
-    } catch (error) {
-      nodeAHealthy = false;
-      console.log('⚠️ Node A appears to be down');
-    }
+  // MAIN node health (for A/B)
+  if (CURRENT_NODE !== 'MAIN') {
+    await pingNode('Main node', MAIN_API_URL, (v) => (mainNodeHealthy = v));
+  }
+
+  // Node A health (for MAIN and B)
+  if (CURRENT_NODE !== 'NODE_A') {
+    await pingNode('Node A', NODE_A_API_URL, (v) => (nodeAHealthy = v));
+  }
+
+  // Node B health (for MAIN and A)
+  if (CURRENT_NODE !== 'NODE_B') {
+    await pingNode('Node B', NODE_B_API_URL, (v) => (nodeBHealthy = v));
   }
 }
 
 /**
- * Determine which node to proxy to based on failover hierarchy
- * Hierarchy: Main → Node A → Node B (local fallback)
+ * Determine which node to proxy to based on failover rules.
+ *
+ * MAIN:
+ *   - Prefer local DB
+ *   - If DB is DOWN → try Node A, then Node B
+ *
+ * NODE_A:
+ *   - Prefer MAIN (coordinator) if healthy
+ *   - Otherwise handle locally
+ *
+ * NODE_B:
+ *   - Prefer MAIN
+ *   - If MAIN down → Node A
+ *   - Otherwise local
  */
 async function getProxyTarget() {
-  // For Main node, check DB health immediately to detect failures
+  // MAIN node: failover to A (then B) only when its DB is unavailable
   if (CURRENT_NODE === 'MAIN') {
     const dbHealthy = await checkDatabaseHealth();
-    if (!dbHealthy && nodeAHealthy) {
-      return { url: NODE_A_API_URL, name: 'Node A (backup coordinator)' };
+    if (!dbHealthy) {
+      if (nodeAHealthy) {
+        console.log(`🔄 Main DB down, targeting Node A for failover`);
+        return { url: NODE_A_API_URL, name: 'Node A (failover from Main)' };
+      }
+      if (nodeBHealthy) {
+        console.log(`🔄 Main DB down and Node A unavailable, targeting Node B for failover`);
+        return { url: NODE_B_API_URL, name: 'Node B (secondary failover from Main)' };
+      }
     }
-    return null; // Either Main's DB is healthy (use local), or no backup available
+    // DB is healthy or no backup nodes -> use local MAIN
+    return null;
   }
-  
-  // Node B: Try Main first, then Node A
+
+  // NODE_B: follow Main → Node A → local
   if (CURRENT_NODE === 'NODE_B') {
     if (mainNodeHealthy) {
       return { url: MAIN_API_URL, name: 'Main' };
     } else if (nodeAHealthy) {
       return { url: NODE_A_API_URL, name: 'Node A' };
     }
-    return null; // No proxy available, use local data
-  } 
-  
-  // Node A: Try Main only (A is second in hierarchy)
+    return null; // no proxy available, use local DB
+  }
+
+  // NODE_A: follow Main → local (A is second in hierarchy)
   if (CURRENT_NODE === 'NODE_A') {
     if (mainNodeHealthy) {
       return { url: MAIN_API_URL, name: 'Main' };
     }
-    return null; // No proxy available, Node A will handle distributed operations
+    return null; // No proxy available, Node A will act as backup coordinator
   }
-  
+
   return null;
 }
 
 /**
- * Periodic health check
+ * Periodic background health checks
  */
 setInterval(async () => {
   await checkDatabaseHealth();
@@ -126,192 +192,190 @@ setInterval(async () => {
 
 /**
  * Forward request to another node based on failover hierarchy
+ *
+ * IMPORTANT:
+ * - If there is NO proxy target, we call `next()` so the local node handles it.
+ * - If proxying succeeds, this function sends the response and returns.
+ * - If all proxies fail and local DB is healthy → we fall back to `next()`.
+ * - If *everything* is down → 503.
  */
 async function forwardToMain(req, res, next) {
-  // Check remote node health first
+  // Update remote health first
   await checkRemoteNodeHealth();
 
-  // Determine proxy target
+  // Decide target
   const proxyTarget = await getProxyTarget();
-  
+
+  // No proxy target available → handle locally
   if (!proxyTarget) {
-    // No proxy target available
-    if (CURRENT_NODE === 'MAIN') {
-      // Main uses its own database
-      return next();
-    } else if (CURRENT_NODE === 'NODE_A') {
-      // Node A acts as backup coordinator when Main is down
-      return next();
-    } else {
-      // Node B has no fallback - return error
-      return res.status(503).json({
-        success: false,
-        message: 'Service temporarily unavailable - all coordinator nodes unreachable',
-        node: CURRENT_NODE
-      });
-    }
+    // MAIN: always just use local DB if its DB is healthy
+    return next();
   }
 
-  // Proxy to target node (Main or Node A for Node B)
-  console.log(`🔄 ${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`);
+  console.log(
+    `🔄 ${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`
+  );
+
+  const targetUrl = `${proxyTarget.url}${req.originalUrl}`;
 
   try {
-    // Use originalUrl to get the full path with query string
-    const targetUrl = `${proxyTarget.url}${req.originalUrl}`;
-    
-    console.log(`   Proxying to: ${targetUrl}`);
-    
     let response;
+
     if (req.method === 'GET') {
       response = await axios.get(targetUrl, {
         timeout: 30000
       });
     } else if (req.method === 'POST') {
       response = await axios.post(targetUrl, req.body, {
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         timeout: 30000
       });
     } else if (req.method === 'PUT') {
       response = await axios.put(targetUrl, req.body, {
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         timeout: 30000
       });
     } else if (req.method === 'DELETE') {
       response = await axios.delete(targetUrl, {
         data: req.body,
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         timeout: 30000
       });
     } else {
-      return res.status(405).json({ 
-        success: false, 
-        message: 'Method not supported for proxy' 
+      return res.status(405).json({
+        success: false,
+        message: 'Method not supported for proxy'
       });
     }
 
-    // Forward the response from target
     console.log(`   ✅ Proxy success: ${response.status} from ${proxyTarget.name}`);
-    res.status(response.status).json(response.data);
-    
+    return res.status(response.status).json(response.data);
   } catch (error) {
     console.error(`❌ Error proxying to ${proxyTarget.name}:`, error.message);
-    
-    // Mark target as unhealthy
+
+    // Mark target unhealthy
     if (proxyTarget.url === MAIN_API_URL) {
       mainNodeHealthy = false;
     } else if (proxyTarget.url === NODE_A_API_URL) {
       nodeAHealthy = false;
+    } else if (proxyTarget.url === NODE_B_API_URL) {
+      nodeBHealthy = false;
     }
-    
-    // Try next in failover chain
-    if (CURRENT_NODE === 'NODE_B' && proxyTarget.url === MAIN_API_URL && nodeAHealthy) {
-      console.log('🔄 Retrying with Node A...');
-      const retryTarget = { url: NODE_A_API_URL, name: 'Node A' };
+
+    // Try *one more* alternative in the chain, if any
+    const backupTarget = await getProxyTarget();
+    if (backupTarget) {
+      console.log(
+        `🔄 ${CURRENT_NODE} retrying proxy to ${backupTarget.name} for ${req.method} ${req.originalUrl}`
+      );
       try {
-        const targetUrl = `${retryTarget.url}${req.originalUrl}`;
+        const backupUrl = `${backupTarget.url}${req.originalUrl}`;
         let response;
+
         if (req.method === 'GET') {
-          response = await axios.get(targetUrl, { timeout: 30000 });
+          response = await axios.get(backupUrl, { timeout: 30000 });
         } else if (req.method === 'POST') {
-          response = await axios.post(targetUrl, req.body, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
+          response = await axios.post(backupUrl, req.body, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000
+          });
+        } else if (req.method === 'PUT') {
+          response = await axios.put(backupUrl, req.body, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000
+          });
+        } else if (req.method === 'DELETE') {
+          response = await axios.delete(backupUrl, {
+            data: req.body,
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000
+          });
         }
-        console.log(`   ✅ Retry success: ${response.status} from ${retryTarget.name}`);
+
+        console.log(`   ✅ Retry success: ${response.status} from ${backupTarget.name}`);
         return res.status(response.status).json(response.data);
-      } catch (retryError) {
-        console.error(`❌ Retry to Node A also failed: ${retryError.message}`);
-        nodeAHealthy = false;
+      } catch (backupError) {
+        console.error(
+          `❌ Retry to ${backupTarget.name} also failed:`,
+          backupError.message
+        );
+        if (backupTarget.url === MAIN_API_URL) {
+          mainNodeHealthy = false;
+        } else if (backupTarget.url === NODE_A_API_URL) {
+          nodeAHealthy = false;
+        } else if (backupTarget.url === NODE_B_API_URL) {
+          nodeBHealthy = false;
+        }
       }
     }
-    
-    // All proxies failed - use local data if available
-    if (isDatabaseHealthy) {
-      console.log(`⚠️ All remote nodes down, falling back to local ${CURRENT_NODE} data`);
+
+    // All proxies failed – if local DB is healthy, let local handlers try
+    const dbHealthy = await checkDatabaseHealth();
+    if (dbHealthy) {
+      console.log(
+        `⚠️ All remote nodes down or unreachable, falling back to local ${CURRENT_NODE} data`
+      );
       return next();
     }
-    
+
     // Everything is down
-    res.status(503).json({
+    return res.status(503).json({
       success: false,
       message: 'Service temporarily unavailable - all nodes unreachable',
       error: error.message,
-      node: CURRENT_NODE,
-      attemptedTargets: [proxyTarget.name]
+      node: CURRENT_NODE
     });
   }
 }
 
 /**
- * Error handler that catches database connection errors and retries via Main
+ * Error handler that catches database connection errors and retries via proxy
  */
 function handleDatabaseError(error, req, res, next) {
-  // Check if error is a database connection error
-  const isConnectionError = 
-    error.code === 'ECONNREFUSED' ||
-    error.code === 'ETIMEDOUT' ||
-    error.code === 'ENOTFOUND' ||
-    error.errno === 'ECONNREFUSED' ||
-    error.sqlState === 'HY000' ||
-    error.message?.includes('connect ETIMEDOUT') ||
-    error.message?.includes('connect ECONNREFUSED');
-
-  if (isConnectionError && CURRENT_NODE !== 'MAIN') {
-    console.log(`❌ Database connection error detected on ${CURRENT_NODE}, marking as unhealthy and proxying to Main`);
+  if (isConnectionError(error)) {
+    console.log(
+      `❌ Database connection error detected on ${CURRENT_NODE}, marking DB unhealthy and attempting proxy`
+    );
     isDatabaseHealthy = false;
-    
-    // Proxy this request to Main
+
+    // Try to proxy this request (MAIN may failover to A/B; A/B may proxy to MAIN or each other)
     return forwardToMain(req, res, next);
   }
 
-  // Not a connection error or we're Main - pass to next handler
-  next(error);
+  // Not a connection error – continue normal error handling
+  return next(error);
 }
 
 /**
- * Execute database query with automatic failover to Main
- * This wraps db.query() and proxies to Main's HTTP API if database is unavailable
+ * Execute database query with automatic failover to proxy
+ *
+ * Pattern usage example in a route:
+ *   const result = await queryWithFailover(sql, params, req, res);
+ *   if (!result || result.proxied) return; // response already sent via proxy
+ *   // else use result.rows, etc.
  */
 async function queryWithFailover(sql, params, req, res) {
-  // If we're Main or database is healthy, try local query first
-  if (CURRENT_NODE === 'MAIN' || isDatabaseHealthy) {
-    try {
-      const result = await db.query(sql, params);
-      isDatabaseHealthy = true; // Mark as healthy on success
-      return { success: true, result };
-    } catch (error) {
-      // Check if it's a connection error
-      const isConnectionError = 
-        error.code === 'ECONNREFUSED' ||
-        error.code === 'ETIMEDOUT' ||
-        error.code === 'ENOTFOUND' ||
-        error.errno === 'ECONNREFUSED' ||
-        error.sqlState === 'HY000' ||
-        error.message?.includes('connect ETIMEDOUT') ||
-        error.message?.includes('connect ECONNREFUSED');
-
-      if (isConnectionError && CURRENT_NODE !== 'MAIN') {
-        console.log(`❌ Database connection failed on ${CURRENT_NODE}, attempting proxy to Main`);
-        isDatabaseHealthy = false;
-        // Fall through to proxy logic below
-      } else {
-        // Not a connection error, or we're Main - throw it
-        throw error;
-      }
+  // Try local DB first (for all nodes)
+  try {
+    const result = await db.query(sql, params);
+    isDatabaseHealthy = true;
+    return { success: true, proxied: false, result };
+  } catch (error) {
+    if (!isConnectionError(error)) {
+      // Normal query error – bubble up
+      throw error;
     }
+
+    console.log(
+      `❌ DB connection failed on ${CURRENT_NODE} during query, attempting proxy`
+    );
+    isDatabaseHealthy = false;
   }
 
-  // Database is unhealthy and we're not Main - proxy to Main's HTTP API
-  if (CURRENT_NODE !== 'MAIN' && !isDatabaseHealthy) {
-    console.log(`🔄 Proxying request to Main (DB unhealthy on ${CURRENT_NODE})`);
-    return forwardToMain(req, res, () => {
-      throw new Error('Both local database and Main node are unreachable');
-    });
-  }
+  // Local DB is down – proxy instead
+  await forwardToMain(req, res, () => {});
+  // At this point, forwardToMain either sent a response or returned 503
+  return { success: false, proxied: true };
 }
 
 module.exports = {
