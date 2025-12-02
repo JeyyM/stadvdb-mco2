@@ -148,7 +148,7 @@ BEGIN
     SELECT CONCAT('📊 Found ', IFNULL(@transaction_count, 0), ' transactions from Node A') AS debug_info;
     
     BEGIN
-        -- CURSOR MUST BE DECLARED BEFORE HANDLERS
+        -- CURSOR MUST BE DECLARED BEFORE HANDLERS 
         DECLARE cur CURSOR FOR
             SELECT 
                 ta.operation_type,
