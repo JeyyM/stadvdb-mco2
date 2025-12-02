@@ -4,7 +4,7 @@ DROP PROCEDURE IF EXISTS distributed_insert;
 DROP PROCEDURE IF EXISTS distributed_update;
 DROP PROCEDURE IF EXISTS distributed_delete;
 DROP PROCEDURE IF EXISTS distributed_addReviews;
-DROP PROCEDURE IF EXISTS distributed_select;
+DROP PROCEDURE IF EXISTS distributed_select;q
 DROP PROCEDURE IF EXISTS distributed_search;
 DROP PROCEDURE IF EXISTS distributed_aggregation;
 
