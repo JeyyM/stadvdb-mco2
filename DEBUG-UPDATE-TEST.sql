@@ -222,10 +222,10 @@ DELIMITER ;
 
 -- Now test it manually
 SELECT '===== BEFORE UPDATE =====' AS test;
-SELECT tconst, startYear FROM `stadvdb-mco2`.title_ft WHERE tconst='tt32146139' LIMIT 1;
+SELECT tconst, startYear FROM `stadvdb-mco2`.title_ft WHERE tconst='tt35269191' LIMIT 1;
 
 SELECT '===== CALLING PROCEDURE =====' AS test;
-CALL distributed_update('tt32146139', 'Test Title', 120, 8.5, 1000, 2025);
+CALL distributed_update('tt35269191', 'Test Title', 120, 8.5, 1000, 2025);
 
 SELECT '===== AFTER UPDATE =====' AS test;
-SELECT tconst, startYear FROM `stadvdb-mco2`.title_ft WHERE tconst='tt32146139' LIMIT 1;
+SELECT tconst, startYear FROM `stadvdb-mco2`.title_ft WHERE tconst='tt35269191' LIMIT 1;
