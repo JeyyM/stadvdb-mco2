@@ -356,17 +356,54 @@ BEGIN
         );
     END IF;
 
-    -- Insert to appropriate node based on startYear
+    -- PHASE 1: Insert to appropriate node based on startYear (guaranteed)
     IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
         -- Insert to Node A (local)
+        START TRANSACTION;
         INSERT INTO title_ft
         (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear, weightedRating)
         VALUES
         (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
+        
+        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
+        VALUES (UUID(), 'COMMIT', 'INSERT', new_tconst, 
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes, 
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', calculated_weightedRating),
+                NOW(6));
+        COMMIT;
     ELSE
-        -- Insert to Node B (federated)
+        -- Insert to Node B (local)
+        START TRANSACTION;
         INSERT INTO title_ft_node_b
         VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+        
+        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
+        VALUES (UUID(), 'COMMIT', 'INSERT', new_tconst, 
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes, 
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'startYear', new_startYear, 'weightedRating', calculated_weightedRating),
+                NOW(6));
+        COMMIT;
+    END IF;
+
+    -- PHASE 2: Attempt replication to Main (best effort)
+    SET federated_error = 0;
+    START TRANSACTION;
+    BEGIN
+        DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+        BEGIN
+            SET federated_error = 1;
+            ROLLBACK;
+        END;
+        
+        INSERT INTO title_ft_main
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes, new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+        COMMIT;
+    END;
+    
+    IF federated_error = 0 THEN
+        SELECT CONCAT('✅ Inserted to Node A/B and replicated to Main: ', new_tconst) AS result;
+    ELSE
+        SELECT CONCAT('⚠️ Inserted to Node A/B but Main is unreachable (will recover later): ', new_tconst) AS result;
     END IF;
 END$$
 
@@ -502,6 +539,7 @@ CREATE PROCEDURE distributed_delete(
 )
 BEGIN
     DECLARE old_startYear SMALLINT UNSIGNED;
+    DECLARE old_value_json TEXT;
     DECLARE federated_error INT DEFAULT 0;
     DECLARE found_in_a BOOLEAN DEFAULT FALSE;
     
@@ -515,12 +553,49 @@ BEGIN
     FROM title_ft
     WHERE tconst = new_tconst;
 
+    -- PHASE 1: Delete from appropriate node (guaranteed)
     IF found_in_a THEN
-        -- Delete from Node A
+        -- Delete from Node A (local)
+        START TRANSACTION;
+        SELECT JSON_OBJECT('tconst', tconst, 'startYear', startYear) INTO old_value_json
+        FROM title_ft WHERE tconst = new_tconst LIMIT 1;
+        
         DELETE FROM title_ft WHERE tconst = new_tconst;
+        
+        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, old_value, timestamp)
+        VALUES (UUID(), 'COMMIT', 'DELETE', new_tconst, old_value_json, NOW(6));
+        COMMIT;
     ELSE
-        -- Try to delete from Node B
+        -- Delete from Node B (federated)
+        START TRANSACTION;
+        SELECT JSON_OBJECT('tconst', tconst, 'startYear', startYear) INTO old_value_json
+        FROM title_ft_node_b WHERE tconst = new_tconst LIMIT 1;
+        
         DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+        
+        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, old_value, timestamp)
+        VALUES (UUID(), 'COMMIT', 'DELETE', new_tconst, old_value_json, NOW(6));
+        COMMIT;
+    END IF;
+
+    -- PHASE 2: Attempt replication to Main (best effort)
+    SET federated_error = 0;
+    START TRANSACTION;
+    BEGIN
+        DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+        BEGIN
+            SET federated_error = 1;
+            ROLLBACK;
+        END;
+        
+        DELETE FROM title_ft_main WHERE tconst = new_tconst;
+        COMMIT;
+    END;
+    
+    IF federated_error = 0 THEN
+        SELECT CONCAT('✅ Deleted from Node A/B and replicated to Main: ', new_tconst) AS result;
+    ELSE
+        SELECT CONCAT('⚠️ Deleted from Node A/B but Main is unreachable (will recover later): ', new_tconst) AS result;
     END IF;
 END$$
 
@@ -624,21 +699,59 @@ BEGIN
         );
     END IF;
 
-    -- Update in appropriate node
+    -- PHASE 1: Update in appropriate node (guaranteed)
     IF current_startYear IS NOT NULL AND current_startYear >= 2025 THEN
-        -- Update in Node A
+        -- Update in Node A (local)
+        START TRANSACTION;
         UPDATE title_ft
         SET numVotes = updated_numVotes,
             averageRating = updated_averageRating,
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
+        
+        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
+        VALUES (UUID(), 'COMMIT', 'UPDATE', new_tconst, 
+                JSON_OBJECT('tconst', new_tconst, 'numVotes', updated_numVotes, 'averageRating', updated_averageRating, 'weightedRating', updated_weightedRating),
+                NOW(6));
+        COMMIT;
     ELSE
-        -- Update in Node B
+        -- Update in Node B (federated)
+        START TRANSACTION;
         UPDATE title_ft_node_b
         SET numVotes = updated_numVotes,
             averageRating = updated_averageRating,
             weightedRating = updated_weightedRating
         WHERE tconst = new_tconst;
+        
+        INSERT INTO transaction_log (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
+        VALUES (UUID(), 'COMMIT', 'UPDATE', new_tconst, 
+                JSON_OBJECT('tconst', new_tconst, 'numVotes', updated_numVotes, 'averageRating', updated_averageRating, 'weightedRating', updated_weightedRating),
+                NOW(6));
+        COMMIT;
+    END IF;
+
+    -- PHASE 2: Attempt replication to Main (best effort)
+    SET federated_error = 0;
+    START TRANSACTION;
+    BEGIN
+        DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+        BEGIN
+            SET federated_error = 1;
+            ROLLBACK;
+        END;
+        
+        UPDATE title_ft_main
+        SET numVotes = updated_numVotes,
+            averageRating = updated_averageRating,
+            weightedRating = updated_weightedRating
+        WHERE tconst = new_tconst;
+        COMMIT;
+    END;
+    
+    IF federated_error = 0 THEN
+        SELECT CONCAT('✅ Updated in Node A/B and replicated to Main: ', new_tconst) AS result;
+    ELSE
+        SELECT CONCAT('⚠️ Updated in Node A/B but Main is unreachable (will recover later): ', new_tconst) AS result;
     END IF;
 END$$
 
