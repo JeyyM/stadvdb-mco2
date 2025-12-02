@@ -29,6 +29,19 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// RECOVERY BLOCKER: Block all requests during recovery
+app.use(async (req, res, next) => {
+  if (recovery.isRecovering()) {
+    console.log(`🔒 Request blocked during recovery: ${req.method} ${req.path}`);
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Server is currently recovering from failure. Please retry in a few seconds.',
+      recovering: true
+    });
+  }
+  next();
+});
+
 // Add debug headers to all responses
 app.use((req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
@@ -597,7 +610,8 @@ app.listen(PORT, async () => {
   console.log(`🔧 Node type: ${NODE_TYPE}`);
   console.log(`🔄 Failover to Main: ${NODE_TYPE !== 'MAIN' ? 'ENABLED' : 'N/A (this is Main)'}`);
   
-  // Run automatic recovery check on startup
+  // Run automatic recovery check on startup ONLY
+  // (Periodic recovery disabled - recovery only runs on wake up)
   try {
     await recovery.runStartupRecovery();
   } catch (error) {
@@ -605,6 +619,5 @@ app.listen(PORT, async () => {
     console.error('⚠️ Server will continue running, but recovery may be incomplete');
   }
   
-  // Start periodic recovery checks (every 5 minutes)
-  recovery.startPeriodicRecovery(5);
+  console.log('✅ Recovery mode: STARTUP ONLY (periodic checks disabled)');
 });
