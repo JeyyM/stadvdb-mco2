@@ -44,20 +44,24 @@ BEGIN
     FROM recovery_checkpoint
     WHERE node_name = 'main';
     
-    -- Find committed transactions in Main's log that we can see via federation
-    SELECT 
-        tm.transaction_id,
-        tm.timestamp,
-        tm.operation_type,
-        tm.record_id,
-        tm.new_value,
-        tm.old_value,
-        tm.table_name
+    -- Find MODIFY transactions in Main's log that need recovery
+    -- Uses LEFT JOIN to handle multi-row transactions with NULL data
+    SELECT DISTINCT
+        COALESCE(tm.transaction_id, prev_tm.transaction_id) AS transaction_id,
+        COALESCE(tm.timestamp, prev_tm.timestamp) AS timestamp,
+        COALESCE(tm.operation_type, prev_tm.operation_type) AS operation_type,
+        COALESCE(tm.record_id, prev_tm.record_id) AS record_id,
+        COALESCE(tm.new_value, prev_tm.new_value) AS new_value,
+        COALESCE(tm.old_value, prev_tm.old_value) AS old_value,
+        COALESCE(tm.table_name, prev_tm.table_name) AS table_name
     FROM transaction_log_main tm
-    WHERE tm.log_type = 'COMMIT'
+    LEFT JOIN transaction_log_main prev_tm 
+        ON tm.transaction_id = prev_tm.transaction_id 
+        AND tm.log_sequence = prev_tm.log_sequence + 1
+        AND prev_tm.new_value IS NOT NULL
+    WHERE tm.log_type = 'MODIFY'
       AND tm.timestamp > checkpoint_time
-      AND tm.operation_type IS NOT NULL
-    ORDER BY tm.timestamp ASC;
+    ORDER BY COALESCE(tm.timestamp, prev_tm.timestamp) ASC;
 END$$
 
 DELIMITER ;
@@ -72,7 +76,9 @@ DELIMITER $$
 CREATE PROCEDURE replay_to_main(
     IN operation_type_param VARCHAR(10),
     IN new_value_json TEXT,
-    IN old_value_json TEXT
+    IN old_value_json TEXT,
+    IN record_id_param VARCHAR(12),
+    IN transaction_id_param VARCHAR(50)
 )
 BEGIN
     DECLARE v_tconst VARCHAR(12);
@@ -82,6 +88,13 @@ BEGIN
     DECLARE v_votes INT UNSIGNED;
     DECLARE v_weighted DECIMAL(4,2);
     DECLARE v_year SMALLINT UNSIGNED;
+    DECLARE federated_error INT DEFAULT 0;
+    DECLARE local_error INT DEFAULT 0;
+    
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+    BEGIN
+        SET federated_error = 1;
+    END;
     
     IF operation_type_param = 'INSERT' THEN
         SET v_tconst = JSON_UNQUOTE(JSON_EXTRACT(new_value_json, '$.tconst'));
@@ -92,14 +105,18 @@ BEGIN
         SET v_weighted = JSON_EXTRACT(new_value_json, '$.weightedRating');
         SET v_year = JSON_EXTRACT(new_value_json, '$.startYear');
         
-        -- Insert to local table (will be partition-routed on Main)
+        -- PHASE 1: Insert to local Main table (guaranteed)
+        START TRANSACTION;
         IF NOT EXISTS (SELECT 1 FROM title_ft WHERE tconst = v_tconst) THEN
             INSERT INTO title_ft (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, weightedRating, startYear)
             VALUES (v_tconst, v_title, v_runtime, v_rating, v_votes, v_weighted, v_year);
             
-            SELECT CONCAT('✅ Replayed INSERT to Main: ', v_tconst) AS result;
+            INSERT INTO transaction_log_main (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
+            VALUES (transaction_id_param, 'COMMIT', 'INSERT', v_tconst, new_value_json, NOW(6));
+            
+            COMMIT;
         ELSE
-            SELECT CONCAT('⚠️ Record already exists on Main: ', v_tconst, ' - Skipped') AS result;
+            ROLLBACK;
         END IF;
         
     ELSEIF operation_type_param = 'UPDATE' THEN
@@ -111,6 +128,8 @@ BEGIN
         SET v_weighted = JSON_EXTRACT(new_value_json, '$.weightedRating');
         SET v_year = JSON_EXTRACT(new_value_json, '$.startYear');
         
+        -- PHASE 1: Update local Main table (guaranteed)
+        START TRANSACTION;
         UPDATE title_ft 
         SET primaryTitle = v_title,
             runtimeMinutes = v_runtime,
@@ -120,15 +139,22 @@ BEGIN
             startYear = v_year
         WHERE tconst = v_tconst;
         
-        SELECT CONCAT('✅ Replayed UPDATE to Main: ', v_tconst) AS result;
+        INSERT INTO transaction_log_main (transaction_id, log_type, operation_type, record_id, new_value, timestamp)
+        VALUES (transaction_id_param, 'COMMIT', 'UPDATE', v_tconst, new_value_json, NOW(6));
+        
+        COMMIT;
         
     ELSEIF operation_type_param = 'DELETE' THEN
         SET v_tconst = JSON_UNQUOTE(JSON_EXTRACT(old_value_json, '$.tconst'));
-        DELETE FROM title_ft WHERE tconst = v_tconst;
-        SELECT CONCAT('✅ Replayed DELETE to Main: ', v_tconst) AS result;
         
-    ELSE
-        SELECT '❌ Unknown operation type' AS result;
+        -- PHASE 1: Delete from local Main table (guaranteed)
+        START TRANSACTION;
+        DELETE FROM title_ft WHERE tconst = v_tconst;
+        
+        INSERT INTO transaction_log_main (transaction_id, log_type, operation_type, record_id, old_value, timestamp)
+        VALUES (transaction_id_param, 'COMMIT', 'DELETE', v_tconst, old_value_json, NOW(6));
+        
+        COMMIT;
     END IF;
 END$$
 
@@ -149,7 +175,7 @@ BEGIN
     DECLARE v_operation VARCHAR(10);
     DECLARE v_new_value TEXT;
     DECLARE v_old_value TEXT;
-    DECLARE v_tconst VARCHAR(12);
+    DECLARE v_record_id VARCHAR(12);
     DECLARE v_transaction_id VARCHAR(50);
     DECLARE v_timestamp TIMESTAMP(6);
     DECLARE v_max_timestamp TIMESTAMP(6);
@@ -170,37 +196,40 @@ BEGIN
     
     SELECT CONCAT('🔄 Starting recovery for Main from checkpoint: ', checkpoint_time) AS status;
     
-    START TRANSACTION;
-    
     SET v_max_timestamp = checkpoint_time;
     
     BEGIN
+        -- DECLARE cur CURSOR FOR reads from MODIFY rows with LEFT JOIN pattern
+        -- This handles multi-row transactions where some rows have NULL data
         DECLARE cur CURSOR FOR
             SELECT 
-                tm.operation_type,
-                tm.new_value,
-                tm.old_value,
-                tm.record_id,
-                tm.transaction_id,
-                tm.timestamp
+                COALESCE(tm.operation_type, prev_tm.operation_type) AS operation_type,
+                COALESCE(tm.new_value, prev_tm.new_value) AS new_value,
+                COALESCE(tm.old_value, prev_tm.old_value) AS old_value,
+                COALESCE(tm.record_id, prev_tm.record_id) AS record_id,
+                COALESCE(tm.transaction_id, prev_tm.transaction_id) AS transaction_id,
+                COALESCE(tm.timestamp, prev_tm.timestamp) AS timestamp
             FROM transaction_log_main tm
-            WHERE tm.log_type = 'COMMIT'
+            LEFT JOIN transaction_log_main prev_tm 
+                ON tm.transaction_id = prev_tm.transaction_id 
+                AND tm.log_sequence = prev_tm.log_sequence + 1
+                AND prev_tm.new_value IS NOT NULL
+            WHERE tm.log_type = 'MODIFY'
               AND tm.timestamp > checkpoint_time
-              AND tm.operation_type IS NOT NULL
-            ORDER BY tm.timestamp ASC;
+            ORDER BY COALESCE(tm.timestamp, prev_tm.timestamp) ASC, tm.log_sequence ASC;
         
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
         
         OPEN cur;
         
         read_loop: LOOP
-            FETCH cur INTO v_operation, v_new_value, v_old_value, v_tconst, v_transaction_id, v_timestamp;
+            FETCH cur INTO v_operation, v_new_value, v_old_value, v_record_id, v_transaction_id, v_timestamp;
             
             IF done THEN
                 LEAVE read_loop;
             END IF;
             
-            CALL replay_to_main(v_operation, v_new_value, v_old_value);
+            CALL replay_to_main(v_operation, v_new_value, v_old_value, v_record_id, v_transaction_id);
             SET recovery_count = recovery_count + 1;
             SET v_max_timestamp = v_timestamp;
             
@@ -215,8 +244,6 @@ BEGIN
         recovery_count = recovery_count + recovery_count,
         last_transaction_id = v_transaction_id
     WHERE node_name = 'main';
-    
-    COMMIT;
     
     SELECT CONCAT('✅ Recovery complete! Replayed ', recovery_count, ' transactions to Main. Checkpoint saved at: ', v_max_timestamp) AS result;
 END$$

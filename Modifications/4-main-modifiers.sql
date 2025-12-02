@@ -120,51 +120,70 @@ BEGIN
       (new_tconst, new_primaryTitle, new_runtimeMinutes,
        new_averageRating, new_numVotes, new_startYear, calculated_weightedRating);
 
-    -- Set flag to prevent triggers on federated nodes from logging
-    SET @federated_operation = 1;
+    -- Log INSERT to Main
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, table_name, record_id, operation_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'MODIFY', 'title_ft', new_tconst, 'INSERT', 'MAIN', NOW(6));
 
-    -- Use federated tables to insert into remote nodes
-    -- >= 2025 = NODE_A, < 2025 (including NULL) = NODE_B
-    IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
-        -- Log to Node A
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        
-        INSERT INTO title_ft_node_a
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
-                
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            NULL,
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', calculated_weightedRating, 'startYear', new_startYear),
-            'INSERT');
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
-    ELSE
-        -- Log to Node B
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        
-        INSERT INTO title_ft_node_b
-        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
-                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
-                
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            NULL,
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
-                       'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', calculated_weightedRating, 'startYear', new_startYear),
-            'INSERT');
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
-    END IF;
-
-    -- Clear federated flag
-    SET @federated_operation = NULL;
-
-    -- Log COMMIT before committing transaction
+    -- Log COMMIT to Main
     SET @current_log_sequence = @current_log_sequence + 1;
     INSERT INTO transaction_log 
     (transaction_id, log_sequence, log_type, source_node, timestamp)
     VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
 
+    -- COMMIT MAIN FIRST - this is the priority transaction
     COMMIT;
+
+    -- Now attempt federated replication in a NEW transaction
+    -- If it fails, Main already has the data
+    START TRANSACTION;
+
+    SET @federated_operation = 1;
+
+    -- Try to replicate insert to remote node, but don't fail if node is down
+    -- The procedure-level CONTINUE HANDLER will catch federated errors
+    IF new_startYear IS NOT NULL AND new_startYear >= 2025 THEN
+        -- Try to insert into Node A
+        INSERT INTO title_ft_node_a
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+        
+        -- If federated operation failed, just skip the logging
+        IF federated_error = 0 THEN
+            CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+                NULL,
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', calculated_weightedRating, 'startYear', new_startYear),
+                'INSERT');
+        END IF;
+    ELSE
+        -- Try to insert into Node B
+        INSERT INTO title_ft_node_b
+        VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
+                new_averageRating, new_numVotes, calculated_weightedRating, new_startYear);
+        
+        -- If federated operation failed, just skip the logging
+        IF federated_error = 0 THEN
+            CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+                NULL,
+                JSON_OBJECT('tconst', new_tconst, 'primaryTitle', new_primaryTitle, 'runtimeMinutes', new_runtimeMinutes,
+                           'averageRating', new_averageRating, 'numVotes', new_numVotes, 'weightedRating', calculated_weightedRating, 'startYear', new_startYear),
+                'INSERT');
+        END IF;
+    END IF;
+
+    -- Clear federated flag
+    SET @federated_operation = NULL;
+
+    -- Commit or rollback the federated transaction based on whether it succeeded
+    IF federated_error = 1 THEN
+        -- Federated failed, rollback this transaction (but Main insert already committed above)
+        ROLLBACK;
+    ELSE
+        -- Federated succeeded, commit this transaction
+        COMMIT;
+    END IF;
     
     -- Clear session variables
     SET @current_transaction_id = NULL;
@@ -402,6 +421,7 @@ BEGIN
     DECLARE old_numVotes INT UNSIGNED;
     DECLARE old_weightedRating DECIMAL(10,2);
     DECLARE federated_error INT DEFAULT 0;
+    DECLARE continue_federated INT DEFAULT 1;
     
     -- Handler for federated table errors - set flag and continue
     -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
@@ -442,34 +462,40 @@ BEGIN
     -- Set flag to prevent triggers on federated nodes from logging
     SET @federated_operation = 1;
 
-    -- Use federated tables to delete from remote nodes and log to them
+    -- Try to replicate delete to remote node, but don't fail if node is down
+    -- Just attempt and ignore errors - Main delete already succeeded
     IF old_startYear IS NOT NULL AND old_startYear >= 2025 THEN
-        -- Delete from Node A
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        
-        DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
-        
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', old_primaryTitle, 'runtimeMinutes', old_runtimeMinutes,
-                       'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
-            NULL, 'DELETE');
-        CALL log_to_remote_node('NODE_A', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
+        BEGIN
+            DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+            BEGIN
+                SET continue_federated = 0;
+                ROLLBACK TO SAVEPOINT before_federated;
+            END;
+            
+            IF continue_federated = 1 THEN
+                DELETE FROM title_ft_node_a WHERE tconst = new_tconst;
+                CALL log_to_remote_node('NODE_A', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+                    JSON_OBJECT('tconst', new_tconst, 'primaryTitle', old_primaryTitle, 'runtimeMinutes', old_runtimeMinutes,
+                               'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
+                    NULL, 'DELETE');
+            END IF;
+        END;
     ELSE
-        -- Delete from Node B
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 1, 'BEGIN', NULL, NULL, NULL, NULL, NULL, NULL);
-        
-        DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
-        
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
-            JSON_OBJECT('tconst', new_tconst, 'primaryTitle', old_primaryTitle, 'runtimeMinutes', old_runtimeMinutes,
-                       'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
-            NULL, 'DELETE');
-        CALL log_to_remote_node('NODE_B', @current_transaction_id, 3, 'COMMIT', NULL, NULL, NULL, NULL, NULL, NULL);
-    END IF;
-
-    -- If federated operations failed, roll back to savepoint but keep Main delete
-    IF federated_error = 1 THEN
-        ROLLBACK TO SAVEPOINT before_federated;
+        BEGIN
+            DECLARE EXIT HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
+            BEGIN
+                SET continue_federated = 0;
+                ROLLBACK TO SAVEPOINT before_federated;
+            END;
+            
+            IF continue_federated = 1 THEN
+                DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
+                CALL log_to_remote_node('NODE_B', @current_transaction_id, 2, 'MODIFY', 'title_ft', new_tconst, 'ALL_COLUMNS',
+                    JSON_OBJECT('tconst', new_tconst, 'primaryTitle', old_primaryTitle, 'runtimeMinutes', old_runtimeMinutes,
+                               'averageRating', old_averageRating, 'numVotes', old_numVotes, 'weightedRating', old_weightedRating, 'startYear', old_startYear),
+                    NULL, 'DELETE');
+            END IF;
+        END;
     END IF;
 
     -- Clear federated flag
@@ -588,7 +614,19 @@ BEGIN
         weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
 
-    -- Use federated tables to update remote nodes
+    -- Log UPDATE to Main
+    SET @current_log_sequence = @current_log_sequence + 1;
+    INSERT INTO transaction_log 
+    (transaction_id, log_sequence, log_type, source_node, timestamp)
+    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
+
+    -- COMMIT MAIN FIRST - this is the priority transaction
+    COMMIT;
+
+    -- Now attempt federated replication in a NEW transaction
+    -- If it fails, Main already has the data
+    START TRANSACTION;
+
     -- Set flag to prevent cascade logging on remote nodes
     SET @federated_operation = 1;
     
@@ -610,13 +648,14 @@ BEGIN
     -- Clear federated flag
     SET @federated_operation = NULL;
 
-    -- Log COMMIT before committing transaction
-    SET @current_log_sequence = @current_log_sequence + 1;
-    INSERT INTO transaction_log 
-    (transaction_id, log_sequence, log_type, source_node, timestamp)
-    VALUES (@current_transaction_id, @current_log_sequence, 'COMMIT', 'MAIN', NOW(6));
-
-    COMMIT;
+    -- Commit or rollback the federated transaction based on whether it succeeded
+    IF federated_error = 1 THEN
+        -- Federated failed, rollback this transaction (but Main update already committed above)
+        ROLLBACK;
+    ELSE
+        -- Federated succeeded, commit this transaction
+        COMMIT;
+    END IF;
     
     -- Clear session variables
     SET @current_transaction_id = NULL;
