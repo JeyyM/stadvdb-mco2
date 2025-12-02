@@ -355,7 +355,13 @@ function App() {
       const res = await fetch(
         `${process.env.REACT_APP_API_URL}/api/titles/distributed-search?search_term=${encodeURIComponent(
           searchTerm
-        )}&limit_count=${limit}`
+        )}&limit_count=${limit}&_t=${Date.now()}`,
+        {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache'
+          }
+        }
       );
       let data;
       let text;
@@ -426,7 +432,13 @@ function App() {
       const res = await fetch(
         `${process.env.REACT_APP_API_URL}/api/titles/distributed-select?select_column=${encodeURIComponent(
           selectColumn
-        )}&order_direction=${orderDirection}&limit_count=${selectLimit}`
+        )}&order_direction=${orderDirection}&limit_count=${selectLimit}&_t=${Date.now()}`,
+        {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache'
+          }
+        }
       );
       const data = await res.json();
       if (data.success) {

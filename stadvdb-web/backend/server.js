@@ -47,6 +47,12 @@ app.use((req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
   res.set('X-Current-Node', currentNode);
   res.set('X-DB-Healthy', failoverProxy.isDatabaseHealthy() ? 'true' : 'false');
+  
+  // CRITICAL: Disable caching for all API responses to prevent stale data
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  
   next();
 });
 
