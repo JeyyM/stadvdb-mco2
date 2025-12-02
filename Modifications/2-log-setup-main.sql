@@ -37,10 +37,8 @@ CREATE TABLE IF NOT EXISTS transaction_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Create federated tables to access other nodes' logs
--- COMMENTED OUT: These fail when Node A/B are unreachable via internal IPs
--- Uncomment and fix CONNECTION strings when network connectivity is resolved dfff
+-- Network connectivity confirmed - creating federated tables
 
-/*
 DROP TABLE IF EXISTS transaction_log_node_a;
 DROP TABLE IF EXISTS transaction_log_node_b;
 
@@ -75,6 +73,5 @@ CREATE TABLE transaction_log_node_b (
     source_node ENUM('MAIN', 'NODE_A', 'NODE_B')
 ) ENGINE=FEDERATED 
 CONNECTION='mysql://g18:fuckingpassword@10.2.14.53:3306/stadvdb-mco2-b/transaction_log';
-*/
 
 SELECT 'Main node transaction logging setup complete' AS status;
