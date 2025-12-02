@@ -36,6 +36,10 @@ BEGIN
         -- Recovery system will sync when nodes come back online
     END;
     
+    -- Set isolation level: READ COMMITTED (INSERT is write-only, no partition logic)
+    -- Must be after all DECLARE statements
+    SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+    
     -- Initialize transaction
     SET current_transaction_id = UUID();
     SET @current_transaction_id = current_transaction_id;
@@ -148,6 +152,10 @@ BEGIN
         -- Recovery system will sync when nodes come back online
     END;
     
+    -- Set isolation level: REPEATABLE READ (must read startYear consistently for partition moves)
+    -- Must be after all DECLARE statements
+    SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+    
     -- Initialize transaction
     SET current_transaction_id = UUID();
     SET @current_transaction_id = current_transaction_id;
@@ -155,10 +163,11 @@ BEGIN
 
     START TRANSACTION;
 
-    -- Get initial startYear from local node
+    -- GROWING PHASE: Lock the row immediately before reading
     SELECT startYear INTO old_startYear
     FROM title_ft
-    WHERE tconst = new_tconst;
+    WHERE tconst = new_tconst
+    FOR UPDATE;  -- Acquire write lock for 2PL
 
     -- Calculate global mean from Main
     SELECT AVG(averageRating) INTO global_mean
@@ -280,6 +289,12 @@ CREATE PROCEDURE distributed_delete(
 )
 BEGIN
     DECLARE current_transaction_id VARCHAR(36);
+    DECLARE old_startYear SMALLINT UNSIGNED;
+    DECLARE old_primaryTitle VARCHAR(1024);
+    DECLARE old_runtimeMinutes SMALLINT UNSIGNED;
+    DECLARE old_averageRating DECIMAL(3,1);
+    DECLARE old_numVotes INT UNSIGNED;
+    DECLARE old_weightedRating DECIMAL(4,2);
     DECLARE federated_error INT DEFAULT 0;
     
     -- Handler for federated table errors - set flag and continue
@@ -293,6 +308,10 @@ BEGIN
         -- Recovery system will sync when nodes come back online
     END;
     
+    -- Set isolation level: SERIALIZABLE (must safely read all old values for logging before delete)
+    -- Must be after all DECLARE statements
+    SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+    
     -- Initialize transaction
     SET current_transaction_id = UUID();
     SET @current_transaction_id = current_transaction_id;
@@ -300,7 +319,14 @@ BEGIN
     
     START TRANSACTION;
     
-    -- Delete from local node
+    -- GROWING PHASE: Lock the row immediately before reading all old values
+    SELECT startYear, primaryTitle, runtimeMinutes, averageRating, numVotes, weightedRating
+    INTO old_startYear, old_primaryTitle, old_runtimeMinutes, old_averageRating, old_numVotes, old_weightedRating
+    FROM title_ft
+    WHERE tconst = new_tconst
+    FOR UPDATE;  -- Acquire write lock for 2PL
+    
+    -- LOCKED WRITES PHASE: Delete from local node (lock still held)
     DELETE FROM title_ft WHERE tconst = new_tconst;
     
     -- Log DELETE to local

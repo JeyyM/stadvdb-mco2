@@ -76,6 +76,10 @@ BEGIN
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
     END;
+    
+    -- Set isolation level: READ COMMITTED (INSERT is write-only, no partition logic)
+    -- Must be after all DECLARE statements
+    SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
     -- Initialize transaction logging
     SET current_transaction_id = UUID();
@@ -222,6 +226,10 @@ BEGIN
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
     END;
+    
+    -- Set isolation level: REPEATABLE READ (must read startYear consistently for partition moves)
+    -- Must be after all DECLARE statements
+    SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 
     -- Initialize transaction logging
     SET current_transaction_id = UUID();
@@ -230,16 +238,11 @@ BEGIN
 
     START TRANSACTION;
 
-    -- DEBUG
-    SELECT CONCAT('DEBUG: Starting update for tconst=', new_tconst, ', newYear=', new_startYear) AS debug_msg;
-
-    -- Get initial startYear
+    -- GROWING PHASE: Lock the row immediately before reading
     SELECT startYear INTO old_startYear
     FROM `stadvdb-mco2`.title_ft
-    WHERE tconst = new_tconst;
-
-    -- DEBUG
-    SELECT CONCAT('DEBUG: Found old startYear=', IFNULL(old_startYear, 'NULL')) AS debug_msg;
+    WHERE tconst = new_tconst
+    FOR UPDATE;  -- Acquire write lock for 2PL
 
     SELECT AVG(averageRating) INTO global_mean
     FROM `stadvdb-mco2`.title_ft
@@ -275,11 +278,6 @@ BEGIN
         weightedRating = updated_weightedRating
     WHERE tconst = new_tconst;
 
-    -- DEBUG
-    SELECT CONCAT('DEBUG: Updated Main table. Rows affected query should show above') AS debug_msg;
-    SELECT CONCAT('DEBUG: Current Main data - tconst=', tconst, ', startYear=', startYear) AS debug_msg
-    FROM `stadvdb-mco2`.title_ft WHERE tconst = new_tconst LIMIT 1;
-
     -- Log UPDATE to Main
     SET @current_log_sequence = @current_log_sequence + 1;
     INSERT INTO transaction_log 
@@ -290,9 +288,6 @@ BEGIN
     -- NOW attempt partition moves - if they fail, Main is already updated
     SAVEPOINT before_federated;
 
-    -- DEBUG
-    SELECT CONCAT('DEBUG: Created savepoint. old_startYear=', IFNULL(old_startYear, 'NULL'), ', new_startYear=', new_startYear) AS debug_msg;
-
     -- Set flag to prevent triggers on federated nodes from logging
     SET @federated_operation = 1;
 
@@ -301,29 +296,19 @@ BEGIN
     -- These operations are "best effort" - if nodes are down, Main has already been updated
     IF (old_startYear IS NULL OR old_startYear < 2025) AND (new_startYear >= 2025) THEN
         -- Moving from B to A
-        SELECT CONCAT('DEBUG: Moving from B to A. Deleting from Node B') AS debug_msg;
         DELETE FROM title_ft_node_b WHERE tconst = new_tconst;
-        
-        -- DEBUG
-        SELECT CONCAT('DEBUG: After Node B delete - federated_error=', federated_error) AS debug_msg;
         
         -- If federated operation failed, just rollback to savepoint (Main already updated)
         IF federated_error = 1 THEN
-            SELECT CONCAT('DEBUG: Node B delete failed, rolling back to savepoint') AS debug_msg;
             ROLLBACK TO SAVEPOINT before_federated;
         ELSE
             -- DELETE succeeded, now try INSERT
-            SELECT CONCAT('DEBUG: Node B delete succeeded, now inserting to Node A') AS debug_msg;
             INSERT INTO title_ft_node_a
             VALUES (new_tconst, new_primaryTitle, new_runtimeMinutes,
                     new_averageRating, new_numVotes, updated_weightedRating, new_startYear);
             
-            -- DEBUG
-            SELECT CONCAT('DEBUG: After Node A insert - federated_error=', federated_error) AS debug_msg;
-            
             -- If INSERT failed, rollback to savepoint
             IF federated_error = 1 THEN
-                SELECT CONCAT('DEBUG: Node A insert failed, rolling back to savepoint') AS debug_msg;
                 ROLLBACK TO SAVEPOINT before_federated;
             END IF;
         END IF;
@@ -384,10 +369,7 @@ BEGIN
 
     -- Clear federated flag
     SET @federated_operation = NULL;
-
-    -- DEBUG
-    SELECT CONCAT('DEBUG: About to commit transaction') AS debug_msg;
-
+    
     -- Log COMMIT before committing transaction
     SET @current_log_sequence = @current_log_sequence + 1;
     INSERT INTO transaction_log 
@@ -396,15 +378,10 @@ BEGIN
 
     COMMIT;
     
-    -- DEBUG
-    SELECT CONCAT('DEBUG: Transaction committed successfully') AS debug_msg;
-    
     -- Clear session variables
     SET @current_transaction_id = NULL;
     SET @current_log_sequence = NULL;
-END$$
-
-DELIMITER ;
+END$$DELIMITER ;
 
 DELIMITER $$
 
@@ -433,6 +410,10 @@ BEGIN
         -- Main operation succeeds, federated replication failed
         -- Recovery system will sync when nodes come back online
     END;
+    
+    -- Set isolation level: SERIALIZABLE (must safely read all old values for logging before delete)
+    -- Must be after all DECLARE statements
+    SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 
     -- Initialize transaction logging
     SET current_transaction_id = UUID();
@@ -441,12 +422,14 @@ BEGIN
 
     START TRANSACTION;
 
-    -- Get old values before deleting
+    -- GROWING PHASE: Lock the row immediately before reading all old values
     SELECT startYear, primaryTitle, runtimeMinutes, averageRating, numVotes, weightedRating
     INTO old_startYear, old_primaryTitle, old_runtimeMinutes, old_averageRating, old_numVotes, old_weightedRating
     FROM `stadvdb-mco2`.title_ft
-    WHERE tconst = new_tconst;
+    WHERE tconst = new_tconst
+    FOR UPDATE;  -- Acquire write lock for 2PL
 
+    -- LOCKED WRITES PHASE: Delete from Main (lock still held)
     DELETE FROM `stadvdb-mco2`.title_ft
     WHERE tconst = new_tconst;
 
