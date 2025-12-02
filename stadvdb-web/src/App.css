@@ -255,6 +255,13 @@ body {
   background: var(--danger-soft);
   color: var(--danger);
   border: 1px solid #fecaca;
+  font-weight: 500;
+  padding: 12px;
+}
+
+.alert-error::before {
+  content: '❌ ';
+  margin-right: 4px;
 }
 
 /* Tables */

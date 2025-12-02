@@ -69,11 +69,25 @@ function App() {
           fetchAggregations();
         }, 800);
       } else {
-        setEditError(data.message || data.error || 'Delete failed');
+        const errorMsg = data.message || data.error || 'Delete failed';
+        console.error('❌ Delete Error:', {
+          operation: 'DELETE',
+          tconst: editForm.tconst,
+          error: errorMsg,
+          fullResponse: data,
+          timestamp: new Date().toISOString()
+        });
+        setEditError(`Delete Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('Delete error:', err);
-      setEditError(err.message || 'Delete failed');
+      console.error('❌ Delete Exception:', {
+        operation: 'DELETE',
+        tconst: editForm.tconst,
+        error: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString()
+      });
+      setEditError(`Delete Error: ${err.message || 'Delete failed'}`);
     } finally {
       setDeleteLoading(false);
     }
@@ -137,11 +151,29 @@ function App() {
           fetchAggregations();
         }, 1000);
       } else {
-        setReviewError(data.message || data.error || 'Failed to add reviews');
+        const errorMsg = data.message || data.error || 'Failed to add reviews';
+        console.error('❌ Add Reviews Error:', {
+          operation: 'ADD_REVIEWS',
+          tconst: editForm.tconst,
+          newRating: rating,
+          newVotes: votes,
+          error: errorMsg,
+          fullResponse: data,
+          timestamp: new Date().toISOString()
+        });
+        setReviewError(`Add Reviews Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('Add reviews error:', err);
-      setReviewError(err.message || 'Failed to add reviews');
+      console.error('❌ Add Reviews Exception:', {
+        operation: 'ADD_REVIEWS',
+        tconst: editForm.tconst,
+        newRating: rating,
+        newVotes: votes,
+        error: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString()
+      });
+      setReviewError(`Add Reviews Error: ${err.message || 'Failed to add reviews'}`);
     } finally {
       setReviewLoading(false);
     }
@@ -224,13 +256,25 @@ function App() {
           fetchAggregations();
         }, 1000);
       } else {
-        setEditError(data.message || data.error || (editRow ? 'Update failed' : 'Insert failed'));
+        const errorMsg = data.message || data.error || (editRow ? 'Update failed' : 'Insert failed');
+        console.error('❌ Server Error:', {
+          operation: editRow ? 'UPDATE' : 'INSERT',
+          error: errorMsg,
+          fullResponse: data,
+          timestamp: new Date().toISOString()
+        });
+        setEditError(`Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('Edit/Insert error:', err);
+      console.error('❌ Edit/Insert error:', {
+        operation: editRow ? 'UPDATE' : 'INSERT',
+        error: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString()
+      });
       // Try to extract meaningful error message
       const errorMessage = err.message || (editRow ? 'Update failed' : 'Insert failed');
-      setEditError(errorMessage);
+      setEditError(`Error: ${errorMessage}`);
     } finally {
       setEditLoading(false);
     }
@@ -263,13 +307,29 @@ function App() {
   fetch(`${process.env.REACT_APP_API_URL}/api/aggregation`)
       .then((response) => response.json())
       .then((data) => {
-        setAggregations(data.data);
+        if (data.success) {
+          setAggregations(data.data);
+        } else {
+          const errorMsg = data.message || data.error || 'Failed to load statistics';
+          console.error('❌ Aggregation Error:', {
+            operation: 'AGGREGATION',
+            error: errorMsg,
+            fullResponse: data,
+            timestamp: new Date().toISOString()
+          });
+          setAggError(`Aggregation Error: ${errorMsg}`);
+        }
         setLoadingAggregations(false);
       })
       .catch((error) => {
-        setAggError('Failed to load statistics');
+        console.error('❌ Aggregation Exception:', {
+          operation: 'AGGREGATION',
+          error: error.message,
+          stack: error.stack,
+          timestamp: new Date().toISOString()
+        });
+        setAggError(`Aggregation Error: ${error.message || 'Failed to load statistics'}`);
         setLoadingAggregations(false);
-        console.error('Aggregation fetch error:', error);
       });
   };
 
@@ -313,12 +373,27 @@ function App() {
       if (data.success) {
         setResults(data.data);
       } else {
-        setError(data.message || 'Search failed');
-        console.error('API error:', data);
+        const errorMsg = data.message || 'Search failed';
+        console.error('❌ Search Error:', {
+          operation: 'SEARCH',
+          searchTerm,
+          limit,
+          error: errorMsg,
+          fullResponse: data,
+          timestamp: new Date().toISOString()
+        });
+        setError(`Search Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error('Network or fetch error:', err);
-      setError('Search failed');
+      console.error('❌ Search Exception:', {
+        operation: 'SEARCH',
+        searchTerm,
+        limit,
+        error: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString()
+      });
+      setError(`Search Error: ${err.message || 'Search failed'}`);
     } finally {
       setLoading(false);
     }
@@ -357,11 +432,29 @@ function App() {
       if (data.success) {
         setSelectResults(data.data);
       } else {
-        setSelectError(data.message || 'Select failed');
+        const errorMsg = data.message || 'Select failed';
+        console.error('❌ Select Error:', {
+          operation: 'SELECT',
+          selectColumn,
+          orderDirection,
+          selectLimit,
+          error: errorMsg,
+          fullResponse: data,
+          timestamp: new Date().toISOString()
+        });
+        setSelectError(`Select Error: ${errorMsg}`);
       }
     } catch (err) {
-      console.error(err);
-      setSelectError('Select failed');
+      console.error('❌ Select Exception:', {
+        operation: 'SELECT',
+        selectColumn,
+        orderDirection,
+        selectLimit,
+        error: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString()
+      });
+      setSelectError(`Select Error: ${err.message || 'Select failed'}`);
     } finally {
       setSelectLoading(false);
     }
@@ -684,7 +777,19 @@ function App() {
                   )}
                 </div>
                 <input type="hidden" name="runtimeMinutes" value={editForm.runtimeMinutes || ''} />
-                {editError && <div style={{ color: 'red', marginBottom: 8 }}>{editError}</div>}
+                {editError && (
+                  <div style={{ 
+                    color: '#d32f2f', 
+                    backgroundColor: '#ffebee',
+                    padding: '12px',
+                    borderRadius: '4px',
+                    marginBottom: '8px',
+                    border: '1px solid #ef5350',
+                    fontWeight: '500'
+                  }}>
+                    ❌ {editError}
+                  </div>
+                )}
                 {editSuccess && (
                   <div style={{ color: 'green', marginBottom: 8 }}>{editSuccess}</div>
                 )}
@@ -790,7 +895,19 @@ function App() {
                             />
                           </div>
                         </div>
-                        {reviewError && <div style={{ color: 'red', marginBottom: 8 }}>{reviewError}</div>}
+                        {reviewError && (
+                          <div style={{ 
+                            color: '#d32f2f', 
+                            backgroundColor: '#ffebee',
+                            padding: '12px',
+                            borderRadius: '4px',
+                            marginBottom: '8px',
+                            border: '1px solid #ef5350',
+                            fontWeight: '500'
+                          }}>
+                            ❌ {reviewError}
+                          </div>
+                        )}
                         {reviewSuccess && <div style={{ color: 'green', marginBottom: 8 }}>{reviewSuccess}</div>}
                         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                           <button
