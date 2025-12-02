@@ -95,7 +95,7 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
       try {
         await db.query('ROLLBACK');
       } catch (e) {
-        // Ignore - transaction may have already ended
+        // Ignore - transaction may have already ended//
       }
       
       // Check if it's a federated table error (node down)
