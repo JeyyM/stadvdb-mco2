@@ -254,7 +254,7 @@ async function forwardToMain(req, res, next) {
     const backupTarget = await getProxyTarget();
     if (backupTarget) {
       console.log(
-        `🔄 ${CURRENT_NODE} retrying proxy to ${backupTarget.name} for ${req.method} ${req.originalUrl}`
+        `${CURRENT_NODE} retrying proxy to ${backupTarget.name} for ${req.method} ${req.originalUrl}`
       );
       try {
         const backupUrl = `${backupTarget.url}${req.originalUrl}`;

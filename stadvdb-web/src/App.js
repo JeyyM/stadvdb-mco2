@@ -772,7 +772,7 @@ function App() {
                     border: '1px solid #ef5350',
                     fontWeight: '500'
                   }}>
-                    ❌ {editError}
+                    {editError}
                   </div>
                 )}
                 {editSuccess && (
@@ -890,7 +890,7 @@ function App() {
                             border: '1px solid #ef5350',
                             fontWeight: '500'
                           }}>
-                            ❌ {reviewError}
+                            {reviewError}
                           </div>
                         )}
                         {reviewSuccess && <div style={{ color: 'green', marginBottom: 8 }}>{reviewSuccess}</div>}
