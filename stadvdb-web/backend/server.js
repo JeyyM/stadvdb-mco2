@@ -216,6 +216,26 @@ app.get('/api/titles/distributed-search', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in distributed_search:', error);
+    
+    // Check if it's a connection error
+    const isConnectionError = error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNREFUSED' ||
+                              error.code === 'EHOSTUNREACH' ||
+                              error.message?.includes('connect ETIMEDOUT') || 
+                              error.message?.includes('connect ECONNREFUSED') ||
+                              error.message?.includes('connect EHOSTUNREACH');
+    
+    if (isConnectionError) {
+      // Try to proxy to another node
+      return failoverProxy.forwardToMain(req, res, () => {
+        res.status(500).json({
+          success: false,
+          message: 'Error in distributed_search - all nodes unavailable',
+          error: error.message
+        });
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error in distributed_search',
