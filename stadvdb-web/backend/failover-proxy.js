@@ -67,6 +67,7 @@ function isConnectionError(error) {
  * Check if *local* database connection is healthy/
  */
 async function checkDatabaseHealth() {
+  // Throttle if we're calling this too frequently
   const now = Date.now();
   if (now - lastHealthCheck < 1000) {
     return isDatabaseHealthy;
@@ -76,13 +77,13 @@ async function checkDatabaseHealth() {
   try {
     await db.query('SELECT 1');
     if (!isDatabaseHealthy) {
-      console.log(`DB on ${CURRENT_NODE} is healthy again`);
+      console.log(`✅ DB on ${CURRENT_NODE} is healthy again`);
     }
     isDatabaseHealthy = true;
     return true;
   } catch (error) {
     if (isDatabaseHealthy) {
-      console.error(`DB health check failed on ${CURRENT_NODE}:`, error.message);
+      console.error(`❌ DB health check failed on ${CURRENT_NODE}:`, error.message);
     }
     isDatabaseHealthy = false;
     return false;
@@ -103,15 +104,15 @@ async function checkRemoteNodeHealth() {
   async function pingNode(name, url, setHealthy) {
     try {
       const response = await axios.get(`${url}/api/recovery/status`, { timeout: 5000 });
-
+      // Check if the node's DATABASE is healthy, not just if HTTP is responding
       const dbHealthy = response.data?.databaseHealthy === true;
       setHealthy(dbHealthy);
       if (!dbHealthy) {
-        console.log(`${name} HTTP is up but database is down`);
+        console.log(`⚠️ ${name} HTTP is up but database is down`);
       }
     } catch (error) {
       setHealthy(false);
-      console.log(`${name} appears to be down: ${error.message}`);
+      console.log(`⚠️ ${name} appears to be down: ${error.message}`);
     }
   }
 
@@ -148,18 +149,20 @@ async function checkRemoteNodeHealth() {
  *   - Otherwise local
  */
 async function getProxyTarget() {
+  // MAIN node: failover to A (then B) only when its DB is unavailable
   if (CURRENT_NODE === 'MAIN') {
     const dbHealthy = await checkDatabaseHealth();
     if (!dbHealthy) {
       if (nodeAHealthy) {
-        console.log(`Main DB down, targeting Node A for failover`);
+        console.log(`🔄 Main DB down, targeting Node A for failover`);
         return { url: NODE_A_API_URL, name: 'Node A (failover from Main)' };
       }
       if (nodeBHealthy) {
-        console.log(`Main DB down and Node A unavailable, targeting Node B for failover`);
+        console.log(`🔄 Main DB down and Node A unavailable, targeting Node B for failover`);
         return { url: NODE_B_API_URL, name: 'Node B (secondary failover from Main)' };
       }
     }
+    // DB is healthy or no backup nodes -> use local MAIN
     return null;
   }
 
@@ -205,15 +208,17 @@ async function forwardToMain(req, res, next) {
   // Update remote health first
   await checkRemoteNodeHealth();
 
+  // Decide target
   const proxyTarget = await getProxyTarget();
 
+  // No proxy target available → handle locally
   if (!proxyTarget) {
-    // just use local DB if it is healthy
+    // MAIN: always just use local DB if its DB is healthy
     return next();
   }
 
   console.log(
-    `${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`
+    `🔄 ${CURRENT_NODE} proxying ${req.method} ${req.originalUrl} to ${proxyTarget.name}`
   );
 
   const targetUrl = `${proxyTarget.url}${req.originalUrl}`;
@@ -248,7 +253,7 @@ async function forwardToMain(req, res, next) {
       });
     }
 
-    console.log(`Proxy success: ${response.status} from ${proxyTarget.name}`);
+    console.log(`   ✅ Proxy success: ${response.status} from ${proxyTarget.name}`);
     
     // Add debug headers to help track proxy chain
     res.set('X-Proxied-From', CURRENT_NODE);
@@ -257,7 +262,7 @@ async function forwardToMain(req, res, next) {
     
     return res.status(response.status).json(response.data);
   } catch (error) {
-    console.error(`Error proxying to ${proxyTarget.name}:`, error.message);
+    console.error(`❌ Error proxying to ${proxyTarget.name}:`, error.message);
 
     // Mark target unhealthy
     if (proxyTarget.url === MAIN_API_URL) {
@@ -272,7 +277,7 @@ async function forwardToMain(req, res, next) {
     const backupTarget = await getProxyTarget();
     if (backupTarget) {
       console.log(
-        `${CURRENT_NODE} retrying proxy to ${backupTarget.name} for ${req.method} ${req.originalUrl}`
+        `🔄 ${CURRENT_NODE} retrying proxy to ${backupTarget.name} for ${req.method} ${req.originalUrl}`
       );
       try {
         const backupUrl = `${backupTarget.url}${req.originalUrl}`;
@@ -298,7 +303,7 @@ async function forwardToMain(req, res, next) {
           });
         }
 
-        console.log(`  Retry success: ${response.status} from ${backupTarget.name}`);
+        console.log(`   ✅ Retry success: ${response.status} from ${backupTarget.name}`);
         
         // Add debug headers for retry
         res.set('X-Proxied-From', CURRENT_NODE);
@@ -309,7 +314,7 @@ async function forwardToMain(req, res, next) {
         return res.status(response.status).json(response.data);
       } catch (backupError) {
         console.error(
-          `Retry to ${backupTarget.name} also failed:`,
+          `❌ Retry to ${backupTarget.name} also failed:`,
           backupError.message
         );
         if (backupTarget.url === MAIN_API_URL) {
@@ -326,7 +331,7 @@ async function forwardToMain(req, res, next) {
     const dbHealthy = await checkDatabaseHealth();
     if (dbHealthy) {
       console.log(
-        `All remote nodes down or unreachable, falling back to local ${CURRENT_NODE} data`
+        `⚠️ All remote nodes down or unreachable, falling back to local ${CURRENT_NODE} data`
       );
       // Add debug header for local fallback
       res.set('X-Fallback-Mode', 'local');
@@ -360,7 +365,7 @@ async function forwardToMain(req, res, next) {
 function handleDatabaseError(error, req, res, next) {
   if (isConnectionError(error)) {
     console.log(
-      `Database connection error detected on ${CURRENT_NODE}, marking DB unhealthy and attempting proxy`
+      `❌ Database connection error detected on ${CURRENT_NODE}, marking DB unhealthy and attempting proxy`
     );
     isDatabaseHealthy = false;
 
@@ -393,7 +398,7 @@ async function queryWithFailover(sql, params, req, res) {
     }
 
     console.log(
-      `DB connection failed on ${CURRENT_NODE} during query, attempting proxy`
+      `❌ DB connection failed on ${CURRENT_NODE} during query, attempting proxy`
     );
     isDatabaseHealthy = false;
   }

@@ -1,8 +1,13 @@
+-- ============================================================================
 -- RECOVERY FOR NODE A (Run on MAIN)
 -- Main reads its own transaction_log and pushes missing transactions to Node A
+-- ============================================================================
 
 USE `stadvdb-mco2`;
 
+-- ============================================================================
+-- 0. CREATE RECOVERY CHECKPOINT TABLE (if not exists)
+-- ============================================================================
 CREATE TABLE IF NOT EXISTS recovery_checkpoint (
     node_name VARCHAR(50) PRIMARY KEY,
     last_recovery_timestamp TIMESTAMP(6) NOT NULL,
@@ -16,8 +21,11 @@ INSERT INTO recovery_checkpoint (node_name, last_recovery_timestamp, recovery_co
 VALUES ('node_a', '2000-01-01 00:00:00.000000', 0)
 ON DUPLICATE KEY UPDATE node_name = node_name;
 
-SELECT 'Recovery checkpoint table ready for Node A' AS status;
+SELECT '✅ Recovery checkpoint table ready for Node A' AS status;
 
+-- ============================================================================
+-- 1. FIND MISSING TRANSACTIONS ON NODE A
+-- ============================================================================
 DROP PROCEDURE IF EXISTS find_missing_on_node_a;
 
 DELIMITER $$
@@ -57,6 +65,9 @@ END$$
 
 DELIMITER ;
 
+-- ============================================================================
+-- 2. REPLAY TRANSACTION TO NODE A
+-- ============================================================================
 DROP PROCEDURE IF EXISTS replay_to_node_a;
 
 DELIMITER $$
@@ -88,9 +99,9 @@ BEGIN
             INSERT INTO title_ft_node_a (tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, weightedRating, startYear)
             VALUES (v_tconst, v_title, v_runtime, v_rating, v_votes, v_weighted, v_year);
             
-            SELECT CONCAT('Replayed INSERT to Node A: ', v_tconst) AS result;
+            SELECT CONCAT('✅ Replayed INSERT to Node A: ', v_tconst) AS result;
         ELSE
-            SELECT CONCAT('Record already exists on Node A: ', v_tconst, ' - Skipped') AS result;
+            SELECT CONCAT('⚠️ Record already exists on Node A: ', v_tconst, ' - Skipped') AS result;
         END IF;
         
     ELSEIF operation_type_param = 'UPDATE' THEN
@@ -111,20 +122,23 @@ BEGIN
             startYear = v_year
         WHERE tconst = v_tconst;
         
-        SELECT CONCAT('Replayed UPDATE to Node A: ', v_tconst) AS result;
+        SELECT CONCAT('✅ Replayed UPDATE to Node A: ', v_tconst) AS result;
         
     ELSEIF operation_type_param = 'DELETE' THEN
         SET v_tconst = JSON_UNQUOTE(JSON_EXTRACT(old_value_json, '$.tconst'));
         DELETE FROM title_ft_node_a WHERE tconst = v_tconst;
-        SELECT CONCAT('Replayed DELETE to Node A: ', v_tconst) AS result;
+        SELECT CONCAT('✅ Replayed DELETE to Node A: ', v_tconst) AS result;
         
     ELSE
-        SELECT 'Unknown operation type' AS result;
+        SELECT '❌ Unknown operation type' AS result;
     END IF;
 END$$
 
 DELIMITER ;
 
+-- ============================================================================
+-- 3. FULL RECOVERY FOR NODE A
+-- ============================================================================
 DROP PROCEDURE IF EXISTS full_recovery_node_a;
 
 DELIMITER $$
@@ -147,7 +161,7 @@ BEGIN
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
         ROLLBACK;
-        SELECT 'Recovery failed - transaction rolled back' AS result;
+        SELECT '❌ Recovery failed - transaction rolled back' AS result;
     END;
     
     -- Get last checkpoint
@@ -156,7 +170,7 @@ BEGIN
     FROM recovery_checkpoint
     WHERE node_name = 'node_a';
     
-    SELECT CONCAT('Starting recovery for Node A from checkpoint: ', checkpoint_time) AS status;
+    SELECT CONCAT('🔄 Starting recovery for Node A from checkpoint: ', checkpoint_time) AS status;
     
     START TRANSACTION;
     
@@ -211,7 +225,7 @@ BEGIN
     
     COMMIT;
     
-    SELECT CONCAT('Recovery complete! Replayed ', recovery_count, ' transactions to Node A. Checkpoint saved at: ', v_max_timestamp) AS result;
+    SELECT CONCAT('✅ Recovery complete! Replayed ', recovery_count, ' transactions to Node A. Checkpoint saved at: ', v_max_timestamp) AS result;
 END$$
 
 DELIMITER ;

@@ -1,5 +1,12 @@
--- TRANSACTION LOGGING SETUP FOR MAIN NODE
+-- ============================================================================
+-- TRANSACTION LOGGING SETUP
+-- Creates transaction_log table for Write-Ahead Logging (WAL)
+-- Implements Deferred Database Modification pattern
+-- ============================================================================
 
+-- ============================================================================
+-- MAIN NODE SETUP
+-- ============================================================================
 USE `stadvdb-mco2`;
 
 DROP TABLE IF EXISTS transaction_log;

@@ -29,10 +29,10 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Blocks all the requests during recovery
+// RECOVERY BLOCKER: Block all requests during recovery
 app.use(async (req, res, next) => {
   if (recovery.isRecovering()) {
-    console.log(`Request blocked during recovery: ${req.method} ${req.path}`);
+    console.log(`🔒 Request blocked during recovery: ${req.method} ${req.path}`);
     return res.status(503).json({
       error: 'Service Unavailable',
       message: 'Server is currently recovering from failure. Please retry in a few seconds.',
@@ -54,7 +54,7 @@ app.use((req, res, next) => {
 app.use('/api', (req, res, next) => {
   const currentNode = failoverProxy.getCurrentNode();
   
-  // Node B ALWAYS proxies to Main/Node A
+  // Node B ALWAYS proxies to Main/Node A (acts as simple client, not coordinator)
   if (currentNode === 'NODE_B') {
     return failoverProxy.forwardToMain(req, res, next);
   }
@@ -63,7 +63,11 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ============================================================================
 // API ROUTES
+
+// DISTRIBUTED TRANSACTIONS
+// Distributed insert system
 app.post('/api/titles/distributed-insert', async (req, res) => {
   try {
     const { tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear } = req.body;
@@ -81,7 +85,8 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     
   } catch (error) {
     console.error('Insert Error:', error);
-
+    
+    // Check if it's a connection error
     const isConnectionError = error.code === 'ETIMEDOUT' || 
                               error.code === 'ECONNREFUSED' ||
                               error.code === 'EHOSTUNREACH' ||
@@ -90,6 +95,7 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
+      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({ success: false, message: 'Insert Error - all nodes unavailable', error: error.message });
       });
@@ -125,7 +131,7 @@ app.post('/api/titles/distributed-update', async (req, res) => {
                              error.errno === 2013 || error.errno === 2006;
     
     if (isFederatedError) {
-      console.warn('Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
+      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
       // Return success - Main DB was updated, federated replication will happen on recovery
       return res.json({ 
         success: true, 
@@ -179,7 +185,7 @@ app.post('/api/titles/distributed-delete', async (req, res) => {
                              error.errno === 2013 || error.errno === 2006;
     
     if (isFederatedError) {
-      console.warn('Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
+      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
       return res.json({ 
         success: true, 
         message: 'Deleted successfully (recovery will sync to offline nodes)',
@@ -226,7 +232,7 @@ app.post('/api/titles/add-reviews', async (req, res) => {
     }
 
     const sql = 'CALL distributed_addReviews(?, ?, ?)';
-    const params = [tconst, newVotes, newRating];
+    const params = [tconst, newVotes, newRating]; // Order: tconst, num_new_reviews, new_rating
     
     await db.query(sql, params);
     res.json({ success: true, message: 'Reviews added successfully' });
@@ -242,7 +248,7 @@ app.post('/api/titles/add-reviews', async (req, res) => {
                              error.errno === 2013 || error.errno === 2006;
     
     if (isFederatedError) {
-      console.warn('Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
+      console.warn('⚠️ Federated table error (node down), but Main operation likely succeeded. Recovery will sync later.');
       return res.json({ 
         success: true, 
         message: 'Reviews added successfully (recovery will sync to offline nodes)',
@@ -270,6 +276,7 @@ app.post('/api/titles/add-reviews', async (req, res) => {
 });
 
 // READ-ONLY ROUTES
+// Distributed select system
 app.get('/api/titles/distributed-select', async (req, res) => {
     try {
         const { select_column = 'averageRating', order_direction = 'DESC', limit_count = 10 } = req.query;
@@ -277,7 +284,8 @@ app.get('/api/titles/distributed-select', async (req, res) => {
         res.json({ success: true, count: results[0]?.length || 0, data: results[0] || [] });
     } catch (error) {
         console.error('Error in select:', error);
-
+        
+        // Check if procedure doesn't exist (Node A/B) or connection error
         const procedureNotFound = error.code === 'ER_SP_DOES_NOT_EXIST' || 
                                   error.message?.includes('PROCEDURE') ||
                                   error.message?.includes('does not exist');
@@ -325,6 +333,7 @@ app.get('/api/titles/distributed-select', async (req, res) => {
     }
 });
 
+// Distributed search system
 app.get('/api/titles/distributed-search', async (req, res) => {
   try {
     const { search_term = '', limit_count = 20 } = req.query;
@@ -336,7 +345,8 @@ app.get('/api/titles/distributed-search', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in distributed_search:', error);
-
+    
+    // Check if it's a connection error
     const isConnectionError = error.code === 'ETIMEDOUT' || 
                               error.code === 'ECONNREFUSED' ||
                               error.code === 'EHOSTUNREACH' ||
@@ -345,6 +355,7 @@ app.get('/api/titles/distributed-search', async (req, res) => {
                               error.message?.includes('connect EHOSTUNREACH');
     
     if (isConnectionError) {
+      // Try to proxy to another node
       return failoverProxy.forwardToMain(req, res, () => {
         res.status(500).json({
           success: false,
@@ -443,10 +454,11 @@ app.get('/api/aggregation', async (req, res) => {
         return res.json({
           success: true,
           data: agg,
-          source: 'local'
+          source: 'local' // Indicate this is local data
         });
       } catch (localError) {
         console.error('Error in local aggregation:', localError);
+        // If local also fails, try proxying to another node
         return failoverProxy.forwardToMain(req, res, () => {
           res.status(500).json({
             success: false,
@@ -556,7 +568,10 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend API is working!' });
 });
 
-// RECOVERY ENDPOINTS
+// ============================================================================
+// RECOVERY API ENDPOINTS
+// ============================================================================
+
 // Manual recovery trigger for Node A
 app.post('/api/recovery/node-a', async (req, res) => {
   try {
@@ -612,7 +627,10 @@ app.get('/api/recovery/status', (req, res) => {
   });
 });
 
+// ============================================================================
 // ERROR HANDLERS
+// ============================================================================
+
 // Database error handler - catches connection errors and proxies to Main
 app.use(failoverProxy.handleDatabaseError);
 
@@ -626,7 +644,9 @@ app.use((error, req, res, next) => {
   });
 });
 
+// ============================================================================
 // START SERVER
+// ============================================================================
 
 app.listen(PORT, async () => {
   const DB_NAME = process.env.DB_NAME || 'stadvdb-mco2';
@@ -634,17 +654,19 @@ app.listen(PORT, async () => {
                     DB_NAME === 'stadvdb-mco2-a' ? 'NODE_A' : 
                     DB_NAME === 'stadvdb-mco2-b' ? 'NODE_B' : 'MAIN';
   
-  console.log(`Server is running on http://localhost:${PORT}`);
-  console.log(`API endpoints available at http://localhost:${PORT}/api`);
-  console.log(`Node type: ${NODE_TYPE}`);
-  console.log(`Failover to Main: ${NODE_TYPE !== 'MAIN' ? 'ENABLED' : 'N/A (this is Main)'}`);
-
+  console.log(`🚀 Server is running on http://localhost:${PORT}`);
+  console.log(`📊 API endpoints available at http://localhost:${PORT}/api`);
+  console.log(`🔧 Node type: ${NODE_TYPE}`);
+  console.log(`🔄 Failover to Main: ${NODE_TYPE !== 'MAIN' ? 'ENABLED' : 'N/A (this is Main)'}`);
+  
+  // Run automatic recovery check on startup ONLY
+  // (Periodic recovery disabled - recovery only runs on wake up)
   try {
     await recovery.runStartupRecovery();
   } catch (error) {
-    console.error('Error during startup recovery:', error.message);
-    console.error('Server will continue running, but recovery may be incomplete');
+    console.error('❌ Error during startup recovery:', error.message);
+    console.error('⚠️ Server will continue running, but recovery may be incomplete');
   }
   
-  console.log('Recovery mode: STARTUP ONLY (periodic checks disabled)');
+  console.log('✅ Recovery mode: STARTUP ONLY (periodic checks disabled)');
 });

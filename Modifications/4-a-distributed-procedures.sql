@@ -1,4 +1,8 @@
+-- ============================================================================
 -- DISTRIBUTED PROCEDURES FOR NODE A (Secondary Coordinator)
+-- This file adds distributed procedures to Node A so it can serve as the
+-- acting coordinator when Main is offline.
+-- ============================================================================
 
 USE `stadvdb-mco2-a`;
 
@@ -12,7 +16,10 @@ DROP PROCEDURE IF EXISTS distributed_aggregation;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED AGGREGATION
+-- Aggregates data across Node A and Node B when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_aggregation()
 BEGIN
@@ -43,7 +50,10 @@ DELIMITER ;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED SELECT
+-- Selects and orders data across Node A and Node B when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_select(
     IN select_column VARCHAR(50),
@@ -239,7 +249,10 @@ DELIMITER ;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED SEARCH
+-- Searches across Node A and Node B when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_search(
     IN search_term VARCHAR(1024),
@@ -278,7 +291,10 @@ DELIMITER ;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED INSERT
+-- Inserts data to appropriate node (A or B) when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_insert(
     IN new_tconst VARCHAR(12),
@@ -358,7 +374,10 @@ DELIMITER ;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED UPDATE
+-- Updates data on appropriate node when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_update(
     IN new_tconst VARCHAR(12),
@@ -473,7 +492,10 @@ DELIMITER ;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED DELETE
+-- Deletes data from appropriate node when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_delete(
     IN new_tconst VARCHAR(12)
@@ -506,7 +528,10 @@ DELIMITER ;
 
 DELIMITER $$
 
+-- ============================================================================
 -- DISTRIBUTED ADD REVIEWS
+-- Adds reviews to appropriate node when Main is offline
+-- ============================================================================
 
 CREATE PROCEDURE distributed_addReviews(
     IN new_tconst VARCHAR(12),
@@ -619,7 +644,9 @@ END$$
 
 DELIMITER ;
 
+-- ============================================================================
 -- VERIFICATION
+-- ============================================================================
 
 -- Show created procedures
 SHOW PROCEDURE STATUS WHERE Db = 'stadvdb-mco2-a';

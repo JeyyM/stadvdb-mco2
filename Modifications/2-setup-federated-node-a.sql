@@ -1,6 +1,8 @@
+-- ============================================================================
 -- SETUP FEDERATED TABLES FOR NODE A
 -- This creates federated table pointing to Node B so Node A can act as
 -- secondary coordinator and aggregate data from both nodes
+-- ============================================================================
 
 USE `stadvdb-mco2-a`;
 
