@@ -66,6 +66,13 @@ function App() {
 
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  // Add Reviews state
+  const [showAddReviews, setShowAddReviews] = useState(false);
+  const [reviewForm, setReviewForm] = useState({ newRating: '', newVotes: '' });
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState(null);
+  const [reviewSuccess, setReviewSuccess] = useState(null);
+
   const handleDelete = async () => {
     if (!editForm.tconst) return;
     if (!window.confirm('Are you sure you want to delete this entry?')) return;
@@ -94,12 +101,81 @@ function App() {
           fetchAggregations();
         }, 800);
       } else {
-        setEditError(data.message || 'Delete failed');
+        setEditError(data.message || data.error || 'Delete failed');
       }
     } catch (err) {
-      setEditError('Delete failed');
+      console.error('Delete error:', err);
+      setEditError(err.message || 'Delete failed');
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  const handleAddReviews = async (e) => {
+    e.preventDefault();
+    
+    // Validation
+    if (!reviewForm.newRating || reviewForm.newRating.trim() === '') {
+      setReviewError('Rating is required');
+      return;
+    }
+    if (!reviewForm.newVotes || reviewForm.newVotes.trim() === '') {
+      setReviewError('Number of votes is required');
+      return;
+    }
+    
+    const rating = parseFloat(reviewForm.newRating);
+    const votes = parseInt(reviewForm.newVotes);
+    
+    if (isNaN(rating) || rating <= 0 || rating > 10) {
+      setReviewError('Rating must be a positive number between 0 and 10');
+      return;
+    }
+    if (isNaN(votes) || votes <= 0) {
+      setReviewError('Number of votes must be a positive number');
+      return;
+    }
+    
+    setReviewLoading(true);
+    setReviewError(null);
+    setReviewSuccess(null);
+    
+    try {
+      const res = await fetchWithFailover('/api/titles/add-reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tconst: editForm.tconst,
+          newRating: rating,
+          newVotes: votes
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setReviewSuccess('Reviews added successfully!');
+        setReviewForm({ newRating: '', newVotes: '' });
+        setTimeout(() => {
+          setShowAddReviews(false);
+          setShowEditPopup(false);
+          setEditRow(null);
+          setReviewSuccess(null);
+          // Refresh all data
+          if (hasSearched) {
+            handleSearch({ preventDefault: () => {} });
+          }
+          if (hasSelected) {
+            handleSelect({ preventDefault: () => {} });
+          }
+          fetchAggregations();
+        }, 1000);
+      } else {
+        setReviewError(data.message || data.error || 'Failed to add reviews');
+      }
+    } catch (err) {
+      console.error('Add reviews error:', err);
+      setReviewError(err.message || 'Failed to add reviews');
+    } finally {
+      setReviewLoading(false);
     }
   };
 
@@ -117,6 +193,10 @@ function App() {
       });
       setEditError(null);
       setEditSuccess(null);
+      setShowAddReviews(false);
+      setReviewForm({ newRating: '', newVotes: '' });
+      setReviewError(null);
+      setReviewSuccess(null);
     }
   }, [showEditPopup, editRow]);
 
@@ -176,10 +256,13 @@ function App() {
           fetchAggregations();
         }, 1000);
       } else {
-        setEditError(data.message || (editRow ? 'Update failed' : 'Insert failed'));
+        setEditError(data.message || data.error || (editRow ? 'Update failed' : 'Insert failed'));
       }
     } catch (err) {
-      setEditError(editRow ? 'Update failed' : 'Insert failed');
+      console.error('Edit/Insert error:', err);
+      // Try to extract meaningful error message
+      const errorMessage = err.message || (editRow ? 'Update failed' : 'Insert failed');
+      setEditError(errorMessage);
     } finally {
       setEditLoading(false);
     }
@@ -679,6 +762,96 @@ function App() {
                   </button>
                 </div>
               </form>
+
+              {/* Add Reviews Section - Only shown when editing */}
+              {!!editRow && (
+                <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1px solid #ddd' }}>
+                  {!showAddReviews ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setShowAddReviews(true)}
+                      disabled={editLoading || deleteLoading || reviewLoading}
+                      style={{ width: '100%' }}
+                    >
+                      Add Reviews
+                    </button>
+                  ) : (
+                    <>
+                      <h4 style={{ marginTop: 0, marginBottom: 16 }}>Add Reviews</h4>
+                      <form onSubmit={handleAddReviews}>
+                        <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                          <div style={{ flex: 1 }}>
+                            <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                              New Rating (0-10)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="10"
+                              value={reviewForm.newRating}
+                              onChange={(e) => setReviewForm(prev => ({ ...prev, newRating: e.target.value }))}
+                              placeholder="e.g. 8.5"
+                              style={{
+                                width: '100%',
+                                padding: 8,
+                                borderRadius: 4,
+                                border: '1px solid #bbb',
+                              }}
+                              disabled={reviewLoading}
+                            />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+                              Number of Votes
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={reviewForm.newVotes}
+                              onChange={(e) => setReviewForm(prev => ({ ...prev, newVotes: e.target.value }))}
+                              placeholder="e.g. 100"
+                              style={{
+                                width: '100%',
+                                padding: 8,
+                                borderRadius: 4,
+                                border: '1px solid #bbb',
+                              }}
+                              disabled={reviewLoading}
+                            />
+                          </div>
+                        </div>
+                        {reviewError && <div style={{ color: 'red', marginBottom: 8 }}>{reviewError}</div>}
+                        {reviewSuccess && <div style={{ color: 'green', marginBottom: 8 }}>{reviewSuccess}</div>}
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => {
+                              setShowAddReviews(false);
+                              setReviewForm({ newRating: '', newVotes: '' });
+                              setReviewError(null);
+                              setReviewSuccess(null);
+                            }}
+                            disabled={reviewLoading}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            className="btn btn-primary"
+                            style={{ background: '#1976d2', color: '#fff', border: 'none' }}
+                            disabled={reviewLoading}
+                          >
+                            {reviewLoading ? 'Adding...' : 'Add Reviews'}
+                          </button>
+                        </div>
+                      </form>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
