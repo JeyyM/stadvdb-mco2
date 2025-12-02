@@ -298,12 +298,191 @@ app.post('/api/db-check-health', async (req, res) => {
   }
 });
 
+// Manual recovery trigger - allows triggering recovery via API
+app.post('/api/recovery/sync-from-main', async (req, res) => {
+  try {
+    console.log('🔄 Manual recovery requested: sync_from_main()');
+    
+    // Check if this is Node A or Node B
+    const dbName = process.env.DB_NAME || process.env.DB_NAME_MAIN;
+    if (dbName === 'stadvdb-mco2') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This endpoint is only for Node A or Node B. Main node should use /api/recovery/recover-from-node-a' 
+      });
+    }
+    
+    const [syncResult] = await db.query('CALL sync_from_main()', [], { isWrite: true });
+    
+    if (syncResult && syncResult[0] && syncResult[0].length > 0) {
+      const sync = syncResult[0][0];
+      res.json({
+        success: true,
+        message: 'Recovery completed successfully',
+        result: {
+          inserted: sync.records_inserted || 0,
+          updated: sync.records_updated || 0,
+          removed: sync.records_removed || 0,
+          status: sync.status
+        }
+      });
+    } else {
+      res.json({ success: true, message: 'Recovery completed' });
+    }
+  } catch (error) {
+    console.error('Recovery error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Recovery failed', 
+      error: error.message 
+    });
+  }
+});
+
+// Manual Main node recovery from Node A
+app.post('/api/recovery/recover-from-node-a', async (req, res) => {
+  try {
+    console.log('🔄 Manual Main recovery requested: recover_from_node_a()');
+    
+    // Check if this is Main node
+    const dbName = process.env.DB_NAME || process.env.DB_NAME_MAIN;
+    if (dbName !== 'stadvdb-mco2') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This endpoint is only for Main node. Node A/B should use /api/recovery/sync-from-main' 
+      });
+    }
+    
+    const [recoveryResult] = await db.query('CALL recover_from_node_a()', [], { isWrite: true });
+    
+    res.json({
+      success: true,
+      message: 'Main node recovery completed. Remember to call demote_to_vice() on Node A.',
+      result: recoveryResult
+    });
+  } catch (error) {
+    console.error('Main recovery error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Main node recovery failed', 
+      error: error.message 
+    });
+  }
+});
+
+// Check if recovery is needed
+app.get('/api/recovery/check-status', async (req, res) => {
+  try {
+    const [healthResult] = await db.query('CALL health_check()', [], { isWrite: false });
+    
+    if (healthResult && healthResult[0] && healthResult[0].length > 0) {
+      const health = healthResult[0][0];
+      const needsRecovery = Math.abs(health.record_count_difference || 0) > 5 || (health.records_only_in_main || 0) > 0;
+      
+      res.json({
+        success: true,
+        needsRecovery,
+        health: {
+          localRecords: health.local_count,
+          mainRecords: health.main_count_in_partition,
+          difference: health.record_count_difference,
+          missingFromLocal: health.records_only_in_main,
+          extraInLocal: health.records_only_in_local
+        }
+      });
+    } else {
+      res.json({ success: true, needsRecovery: false });
+    }
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      message: 'Could not check recovery status', 
+      error: error.message 
+    });
+  }
+});
+
+// ============================================================================
+// AUTOMATIC RECOVERY ON STARTUP
+// ============================================================================
+
+async function performStartupRecovery() {
+  try {
+    console.log('🔄 Checking if recovery is needed...');
+    
+    // Determine which node this backend is connected to
+    const dbName = process.env.DB_NAME || process.env.DB_NAME_MAIN;
+    const isMainNode = dbName === 'stadvdb-mco2';
+    const isNodeA = dbName === 'stadvdb-mco2-a';
+    const isNodeB = dbName === 'stadvdb-mco2-b';
+    
+    if (isNodeA || isNodeB) {
+      const nodeName = isNodeA ? 'Node A' : 'Node B';
+      console.log(`📡 ${nodeName} detected - checking if recovery from Main is needed...`);
+      
+      try {
+        // Check if this node needs recovery by calling health_check
+        const [healthResult] = await db.query('CALL health_check()', [], { isWrite: false });
+        
+        if (healthResult && healthResult[0] && healthResult[0].length > 0) {
+          const health = healthResult[0][0];
+          const recordDiff = Math.abs(health.record_count_difference || 0);
+          const recordsOnlyInMain = health.records_only_in_main || 0;
+          
+          // If significant difference, run recovery
+          if (recordDiff > 5 || recordsOnlyInMain > 0) {
+            console.log(`⚠️  ${nodeName} is out of sync (diff: ${recordDiff}, missing: ${recordsOnlyInMain})`);
+            console.log(`🔧 Running automatic recovery: sync_from_main()...`);
+            
+            const [syncResult] = await db.query('CALL sync_from_main()', [], { isWrite: true });
+            
+            if (syncResult && syncResult[0] && syncResult[0].length > 0) {
+              const sync = syncResult[0][0];
+              console.log(`✅ Recovery complete!`);
+              console.log(`   - Inserted: ${sync.records_inserted || 0} records`);
+              console.log(`   - Updated: ${sync.records_updated || 0} records`);
+              console.log(`   - Removed: ${sync.records_removed || 0} records`);
+            }
+          } else {
+            console.log(`✅ ${nodeName} is in sync with Main (diff: ${recordDiff})`);
+          }
+        }
+      } catch (recoveryError) {
+        console.warn(`⚠️  Could not perform automatic recovery: ${recoveryError.message}`);
+        console.log('   This is normal if Main node is unreachable');
+      }
+      
+    } else if (isMainNode) {
+      console.log('🏛️  Main node detected - checking if recovery from Node A is needed...');
+      
+      try {
+        // Check if Main was down and Node A was acting master
+        // This is more complex - would need to check Node A's logs
+        // For now, we'll skip automatic Main recovery and require manual intervention
+        console.log('   Main node recovery requires manual execution of recover_from_node_a()');
+        console.log('   Run: CALL recover_from_node_a(); if Main was previously down');
+      } catch (err) {
+        console.warn(`   Could not check Main recovery status: ${err.message}`);
+      }
+    }
+    
+    console.log('✅ Startup recovery check complete\n');
+    
+  } catch (error) {
+    console.error('❌ Error during startup recovery check:', error.message);
+    console.log('   Server will continue starting, but data may be out of sync');
+  }
+}
+
 // ============================================================================
 // START SERVER
 // ============================================================================
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
   console.log(`📊 API endpoints available at http://localhost:${PORT}/api`);
-  console.log(`🏥 Database health status: http://localhost:${PORT}/api/db-status`);
+  console.log(`🏥 Database health status: http://localhost:${PORT}/api/db-status\n`);
+  
+  // Perform automatic recovery check after server starts
+  await performStartupRecovery();
 });
