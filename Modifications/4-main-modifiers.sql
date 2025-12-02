@@ -28,8 +28,8 @@ CREATE PROCEDURE log_to_remote_node(
 BEGIN
     -- Handler for federated errors when logging to remote nodes
     -- Error codes: 1429 (can't connect), 1158, 1159, 1189 (timeouts), 
-    --              2013, 2006 (connection lost), 1296 (federated error wrapper)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296
+    --              2013, 2006 (connection lost), 1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
         -- Silent failure - recovery system will replay these logs when node comes back
     END;
@@ -68,8 +68,9 @@ BEGIN
     
     -- Handler for federated table errors - set flag and continue
     -- Error codes: 1429 (can't connect), 1158 (communication error), 1159 (net timeout), 
-    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone)
-    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006
+    --              1189 (net read timeout), 2013 (lost connection), 2006 (server gone),
+    --              1296 (federated error wrapper), 1430 (query on foreign data source)
+    DECLARE CONTINUE HANDLER FOR 1429, 1158, 1159, 1189, 2013, 2006, 1296, 1430
     BEGIN
         SET federated_error = 1;
         -- Main operation succeeds, federated replication failed

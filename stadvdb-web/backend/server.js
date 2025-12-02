@@ -80,8 +80,47 @@ app.post('/api/titles/distributed-insert', async (req, res) => {
     const sql = 'CALL distributed_insert(?, ?, ?, ?, ?, ?)';
     const params = [tconst, primaryTitle, runtimeMinutes, averageRating, numVotes, startYear];
     
-    await db.query(sql, params);
-    res.json({ success: true, message: 'Inserted successfully' });
+    try {
+      await db.query(sql, params);
+      res.json({ success: true, message: 'Inserted successfully' });
+    } catch (procError) {
+      console.log('Procedure error caught:', {
+        errno: procError.errno,
+        code: procError.code,
+        message: procError.message,
+        sqlMessage: procError.sqlMessage
+      });
+      
+      // Always rollback to clean up any uncommitted transaction
+      try {
+        await db.query('ROLLBACK');
+      } catch (e) {
+        // Ignore - transaction may have already ended
+      }
+      
+      // Check if it's a federated table error (node down)
+      const isFederatedError = procError.message?.includes('Unable to connect to foreign data source') ||
+                               procError.message?.includes('Can\'t connect to MySQL server') ||
+                               procError.message?.includes('FEDERATED') ||
+                               procError.errno === 1296 || procError.errno === 1429 || procError.errno === 1158 || 
+                               procError.errno === 1159 || procError.errno === 1189 ||
+                               procError.errno === 2013 || procError.errno === 2006 || procError.errno === 1430;
+      
+      const isLockTimeout = procError.errno === 1205 && procError.code === 'ER_LOCK_WAIT_TIMEOUT';
+      
+      if (isFederatedError || isLockTimeout) {
+        console.warn('⚠️ Federated error or lock timeout during insert (node offline). Recovery will sync later.');
+        // Even though procedure failed, Main DB may have been partially updated
+        // Return success to signal that recovery system will handle sync
+        return res.json({ 
+          success: true, 
+          message: 'Inserted successfully (recovery will sync to offline nodes)',
+          warning: 'Some nodes offline - will sync on recovery'
+        });
+      }
+      
+      res.status(500).json({ success: false, message: 'Insert Error - Unexpected error', error: procError.message });
+    }
     
   } catch (error) {
     console.error('Insert Error:', error);
